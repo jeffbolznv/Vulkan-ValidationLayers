@@ -1600,7 +1600,7 @@ bool ValidatePointListShaderState(const layer_data *dev_data, const PIPELINE_STA
                             "Pipeline topology is set to POINT_LIST and geometry or tessellation shaders write PointSize which "
                             "is prohibited when the shaderTessellationAndGeometryPointSize feature is not enabled.");
         }
-    } else if (!pointsize_written) {
+    } else if ((stage == VK_SHADER_STAGE_VERTEX_BIT) && !pointsize_written) {
         skip |=
             log_msg(GetReportData(dev_data), VK_DEBUG_REPORT_ERROR_BIT_EXT, VK_DEBUG_REPORT_OBJECT_TYPE_PIPELINE_EXT,
                     HandleToUint64(pipeline->pipeline), kVUID_Core_Shader_MissingPointSizeBuiltIn,
@@ -1805,9 +1805,9 @@ bool ValidateAndCapturePipelineShaderState(layer_data *dev_data, PIPELINE_STATE 
     int fragment_stage = GetShaderStageId(VK_SHADER_STAGE_FRAGMENT_BIT);
     auto report_data = GetReportData(dev_data);
 
-    shader_module const *shaders[5];
+    shader_module const *shaders[32];
     memset(shaders, 0, sizeof(shaders));
-    spirv_inst_iter entrypoints[5];
+    spirv_inst_iter entrypoints[32];
     memset(entrypoints, 0, sizeof(entrypoints));
     bool skip = false;
 
