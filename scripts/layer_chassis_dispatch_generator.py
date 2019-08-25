@@ -140,6 +140,70 @@ class LayerChassisDispatchOutputGenerator(OutputGenerator):
  */"""
 
     inline_custom_source_preamble = """
+
+class ThreadPool {
+    uint64_t arena[0x1000 / sizeof(uint64_t)];
+    std::vector<void *> other_allocs;
+    size_t cursor;
+
+public:
+    ThreadPool() : cursor(0) {}
+
+    void clear()
+    {
+        if (other_allocs.size()) {
+            for (auto ptr : other_allocs) {
+                free(ptr);
+            }
+            other_allocs.clear();
+        }
+        cursor = 0;
+    }
+
+    void *alloc(size_t count)
+    {
+        if (count == 0) {
+            return nullptr;
+        }
+        if (cursor + count <= sizeof(arena)) {
+            void *ret = &arena[cursor];
+            cursor += count;
+            return ret;
+        }
+        void *ret = malloc(count);
+        other_allocs.push_back(ret);
+        return ret;
+    }
+};
+
+thread_local ThreadPool pool;
+
+void *operator new (size_t count, ThreadPool &pool)
+{
+    return pool.alloc(count);
+}
+
+void *operator new[](size_t count, ThreadPool &pool)
+{
+    return pool.alloc(count);
+}
+
+void operator delete(void *ptr)
+{
+}
+
+void operator delete[](void *ptr)
+{
+}
+
+void operator delete(void *ptr, ThreadPool &pool)
+{
+}
+
+void operator delete[](void *ptr, ThreadPool &pool)
+{
+}
+
 VkResult DispatchCreateComputePipelines(VkDevice device, VkPipelineCache pipelineCache, uint32_t createInfoCount,
                                         const VkComputePipelineCreateInfo *pCreateInfos,
                                         const VkAllocationCallbacks *pAllocator, VkPipeline *pPipelines) {
@@ -148,7 +212,7 @@ VkResult DispatchCreateComputePipelines(VkDevice device, VkPipelineCache pipelin
                                                                                           pCreateInfos, pAllocator, pPipelines);
     safe_VkComputePipelineCreateInfo *local_pCreateInfos = NULL;
     if (pCreateInfos) {
-        local_pCreateInfos = new safe_VkComputePipelineCreateInfo[createInfoCount];
+        local_pCreateInfos = new (pool) safe_VkComputePipelineCreateInfo[createInfoCount];
         for (uint32_t idx0 = 0; idx0 < createInfoCount; ++idx0) {
             local_pCreateInfos[idx0].initialize(&pCreateInfos[idx0]);
             if (pCreateInfos[idx0].basePipelineHandle) {
@@ -176,6 +240,7 @@ VkResult DispatchCreateComputePipelines(VkDevice device, VkPipelineCache pipelin
             }
         }
     }
+    pool.clear();
     return result;
 }
 
@@ -187,7 +252,7 @@ VkResult DispatchCreateGraphicsPipelines(VkDevice device, VkPipelineCache pipeli
                                                                                            pCreateInfos, pAllocator, pPipelines);
     safe_VkGraphicsPipelineCreateInfo *local_pCreateInfos = nullptr;
     if (pCreateInfos) {
-        local_pCreateInfos = new safe_VkGraphicsPipelineCreateInfo[createInfoCount];
+        local_pCreateInfos = new (pool) safe_VkGraphicsPipelineCreateInfo[createInfoCount];
         read_dispatch_lock_guard_t lock(dispatch_lock);
         for (uint32_t idx0 = 0; idx0 < createInfoCount; ++idx0) {
             bool uses_color_attachment = false;
@@ -237,6 +302,7 @@ VkResult DispatchCreateGraphicsPipelines(VkDevice device, VkPipelineCache pipeli
             }
         }
     }
+    pool.clear();
     return result;
 }
 
@@ -257,6 +323,7 @@ static void UpdateCreateRenderPassState(ValidationObject *layer_data, const T *p
         if (uses_color) renderpass_state.subpasses_using_color_attachment.insert(subpass);
         if (uses_depthstencil) renderpass_state.subpasses_using_depthstencil_attachment.insert(subpass);
     }
+    pool.clear();
 }
 
 VkResult DispatchCreateRenderPass(VkDevice device, const VkRenderPassCreateInfo *pCreateInfo,
@@ -269,6 +336,7 @@ VkResult DispatchCreateRenderPass(VkDevice device, const VkRenderPassCreateInfo 
         UpdateCreateRenderPassState(layer_data, pCreateInfo, *pRenderPass);
         *pRenderPass = layer_data->WrapNew(*pRenderPass);
     }
+    pool.clear();
     return result;
 }
 
@@ -282,6 +350,7 @@ VkResult DispatchCreateRenderPass2KHR(VkDevice device, const VkRenderPassCreateI
         UpdateCreateRenderPassState(layer_data, pCreateInfo, *pRenderPass);
         *pRenderPass = layer_data->WrapNew(*pRenderPass);
     }
+    pool.clear();
     return result;
 }
 
@@ -301,6 +370,7 @@ void DispatchDestroyRenderPass(VkDevice device, VkRenderPass renderPass, const V
 
     write_dispatch_lock_guard_t lock(dispatch_lock);
     layer_data->renderpasses_states.erase(renderPass);
+    pool.clear();
 }
 
 VkResult DispatchCreateSwapchainKHR(VkDevice device, const VkSwapchainCreateInfoKHR *pCreateInfo,
@@ -309,7 +379,7 @@ VkResult DispatchCreateSwapchainKHR(VkDevice device, const VkSwapchainCreateInfo
     if (!wrap_handles) return layer_data->device_dispatch_table.CreateSwapchainKHR(device, pCreateInfo, pAllocator, pSwapchain);
     safe_VkSwapchainCreateInfoKHR *local_pCreateInfo = NULL;
     if (pCreateInfo) {
-        local_pCreateInfo = new safe_VkSwapchainCreateInfoKHR(pCreateInfo);
+        local_pCreateInfo = new (pool) safe_VkSwapchainCreateInfoKHR(pCreateInfo);
         local_pCreateInfo->oldSwapchain = layer_data->Unwrap(pCreateInfo->oldSwapchain);
         // Surface is instance-level object
         local_pCreateInfo->surface = layer_data->Unwrap(pCreateInfo->surface);
@@ -321,6 +391,7 @@ VkResult DispatchCreateSwapchainKHR(VkDevice device, const VkSwapchainCreateInfo
     if (VK_SUCCESS == result) {
         *pSwapchain = layer_data->WrapNew(*pSwapchain);
     }
+    pool.clear();
     return result;
 }
 
@@ -333,7 +404,7 @@ VkResult DispatchCreateSharedSwapchainsKHR(VkDevice device, uint32_t swapchainCo
     safe_VkSwapchainCreateInfoKHR *local_pCreateInfos = NULL;
     {
         if (pCreateInfos) {
-            local_pCreateInfos = new safe_VkSwapchainCreateInfoKHR[swapchainCount];
+            local_pCreateInfos = new (pool) safe_VkSwapchainCreateInfoKHR[swapchainCount];
             for (uint32_t i = 0; i < swapchainCount; ++i) {
                 local_pCreateInfos[i].initialize(&pCreateInfos[i]);
                 if (pCreateInfos[i].surface) {
@@ -354,6 +425,7 @@ VkResult DispatchCreateSharedSwapchainsKHR(VkDevice device, uint32_t swapchainCo
             pSwapchains[i] = layer_data->WrapNew(pSwapchains[i]);
         }
     }
+    pool.clear();
     return result;
 }
 
@@ -380,6 +452,7 @@ VkResult DispatchGetSwapchainImagesKHR(VkDevice device, VkSwapchainKHR swapchain
             }
         }
     }
+    pool.clear();
     return result;
 }
 
@@ -405,6 +478,7 @@ void DispatchDestroySwapchainKHR(VkDevice device, VkSwapchainKHR swapchain, cons
     }
 
     layer_data->device_dispatch_table.DestroySwapchainKHR(device, swapchain, pAllocator);
+    pool.clear();
 }
 
 VkResult DispatchQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR *pPresentInfo) {
@@ -413,7 +487,7 @@ VkResult DispatchQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR *pPresent
     safe_VkPresentInfoKHR *local_pPresentInfo = NULL;
     {
         if (pPresentInfo) {
-            local_pPresentInfo = new safe_VkPresentInfoKHR(pPresentInfo);
+            local_pPresentInfo = new (pool) safe_VkPresentInfoKHR(pPresentInfo);
             if (local_pPresentInfo->pWaitSemaphores) {
                 for (uint32_t index1 = 0; index1 < local_pPresentInfo->waitSemaphoreCount; ++index1) {
                     local_pPresentInfo->pWaitSemaphores[index1] = layer_data->Unwrap(pPresentInfo->pWaitSemaphores[index1]);
@@ -436,6 +510,7 @@ VkResult DispatchQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR *pPresent
         }
     }
     delete local_pPresentInfo;
+    pool.clear();
     return result;
 }
 
@@ -461,6 +536,7 @@ void DispatchDestroyDescriptorPool(VkDevice device, VkDescriptorPool descriptorP
     }
 
     layer_data->device_dispatch_table.DestroyDescriptorPool(device, descriptorPool, pAllocator);
+    pool.clear();
 }
 
 VkResult DispatchResetDescriptorPool(VkDevice device, VkDescriptorPool descriptorPool, VkDescriptorPoolResetFlags flags) {
@@ -480,6 +556,7 @@ VkResult DispatchResetDescriptorPool(VkDevice device, VkDescriptorPool descripto
         layer_data->pool_descriptor_sets_map[descriptorPool].clear();
     }
 
+    pool.clear();
     return result;
 }
 
@@ -490,7 +567,7 @@ VkResult DispatchAllocateDescriptorSets(VkDevice device, const VkDescriptorSetAl
     safe_VkDescriptorSetAllocateInfo *local_pAllocateInfo = NULL;
     {
         if (pAllocateInfo) {
-            local_pAllocateInfo = new safe_VkDescriptorSetAllocateInfo(pAllocateInfo);
+            local_pAllocateInfo = new (pool) safe_VkDescriptorSetAllocateInfo(pAllocateInfo);
             if (pAllocateInfo->descriptorPool) {
                 local_pAllocateInfo->descriptorPool = layer_data->Unwrap(pAllocateInfo->descriptorPool);
             }
@@ -514,6 +591,7 @@ VkResult DispatchAllocateDescriptorSets(VkDevice device, const VkDescriptorSetAl
             pool_descriptor_sets.insert(pDescriptorSets[index0]);
         }
     }
+    pool.clear();
     return result;
 }
 
@@ -527,7 +605,7 @@ VkResult DispatchFreeDescriptorSets(VkDevice device, VkDescriptorPool descriptor
     {
         local_descriptor_pool = layer_data->Unwrap(descriptorPool);
         if (pDescriptorSets) {
-            local_pDescriptorSets = new VkDescriptorSet[descriptorSetCount];
+            local_pDescriptorSets = new (pool) VkDescriptorSet[descriptorSetCount];
             for (uint32_t index0 = 0; index0 < descriptorSetCount; ++index0) {
                 local_pDescriptorSets[index0] = layer_data->Unwrap(pDescriptorSets[index0]);
             }
@@ -546,6 +624,7 @@ VkResult DispatchFreeDescriptorSets(VkDevice device, VkDescriptorPool descriptor
             unique_id_mapping.erase(unique_id);
         }
     }
+    pool.clear();
     return result;
 }
 
@@ -560,7 +639,7 @@ VkResult DispatchCreateDescriptorUpdateTemplate(VkDevice device, const VkDescrip
     safe_VkDescriptorUpdateTemplateCreateInfo *local_create_info = NULL;
     {
         if (pCreateInfo) {
-            local_create_info = new safe_VkDescriptorUpdateTemplateCreateInfo(pCreateInfo);
+            local_create_info = new (pool) safe_VkDescriptorUpdateTemplateCreateInfo(pCreateInfo);
             if (pCreateInfo->descriptorSetLayout) {
                 local_create_info->descriptorSetLayout = layer_data->Unwrap(pCreateInfo->descriptorSetLayout);
             }
@@ -576,9 +655,10 @@ VkResult DispatchCreateDescriptorUpdateTemplate(VkDevice device, const VkDescrip
         *pDescriptorUpdateTemplate = layer_data->WrapNew(*pDescriptorUpdateTemplate);
 
         // Shadow template createInfo for later updates
-        std::unique_ptr<TEMPLATE_STATE> template_state(new TEMPLATE_STATE(*pDescriptorUpdateTemplate, local_create_info));
+        std::unique_ptr<TEMPLATE_STATE> template_state(new (pool) TEMPLATE_STATE(*pDescriptorUpdateTemplate, local_create_info));
         layer_data->desc_template_createinfo_map[(uint64_t)*pDescriptorUpdateTemplate] = std::move(template_state);
     }
+    pool.clear();
     return result;
 }
 
@@ -593,7 +673,7 @@ VkResult DispatchCreateDescriptorUpdateTemplateKHR(VkDevice device, const VkDesc
     safe_VkDescriptorUpdateTemplateCreateInfo *local_create_info = NULL;
     {
         if (pCreateInfo) {
-            local_create_info = new safe_VkDescriptorUpdateTemplateCreateInfo(pCreateInfo);
+            local_create_info = new (pool) safe_VkDescriptorUpdateTemplateCreateInfo(pCreateInfo);
             if (pCreateInfo->descriptorSetLayout) {
                 local_create_info->descriptorSetLayout = layer_data->Unwrap(pCreateInfo->descriptorSetLayout);
             }
@@ -609,9 +689,10 @@ VkResult DispatchCreateDescriptorUpdateTemplateKHR(VkDevice device, const VkDesc
         *pDescriptorUpdateTemplate = layer_data->WrapNew(*pDescriptorUpdateTemplate);
 
         // Shadow template createInfo for later updates
-        std::unique_ptr<TEMPLATE_STATE> template_state(new TEMPLATE_STATE(*pDescriptorUpdateTemplate, local_create_info));
+        std::unique_ptr<TEMPLATE_STATE> template_state(new (pool) TEMPLATE_STATE(*pDescriptorUpdateTemplate, local_create_info));
         layer_data->desc_template_createinfo_map[(uint64_t)*pDescriptorUpdateTemplate] = std::move(template_state);
     }
+    pool.clear();
     return result;
 }
 
@@ -634,6 +715,7 @@ void DispatchDestroyDescriptorUpdateTemplate(VkDevice device, VkDescriptorUpdate
     }
 
     layer_data->device_dispatch_table.DestroyDescriptorUpdateTemplate(device, descriptorUpdateTemplate, pAllocator);
+    pool.clear();
 }
 
 // This is the extension version of this routine.  The core version is above.
@@ -655,6 +737,7 @@ void DispatchDestroyDescriptorUpdateTemplateKHR(VkDevice device, VkDescriptorUpd
     }
 
     layer_data->device_dispatch_table.DestroyDescriptorUpdateTemplateKHR(device, descriptorUpdateTemplate, pAllocator);
+    pool.clear();
 }
 
 void *BuildUnwrappedUpdateTemplateBuffer(ValidationObject *layer_data, uint64_t descriptorUpdateTemplate, const void *pData) {
@@ -680,7 +763,7 @@ void *BuildUnwrappedUpdateTemplateBuffer(ValidationObject *layer_data, uint64_t 
                     auto image_entry = reinterpret_cast<VkDescriptorImageInfo *>(update_entry);
                     allocation_size = std::max(allocation_size, offset + sizeof(VkDescriptorImageInfo));
 
-                    VkDescriptorImageInfo *wrapped_entry = new VkDescriptorImageInfo(*image_entry);
+                    VkDescriptorImageInfo *wrapped_entry = new (pool) VkDescriptorImageInfo(*image_entry);
                     wrapped_entry->sampler = layer_data->Unwrap(image_entry->sampler);
                     wrapped_entry->imageView = layer_data->Unwrap(image_entry->imageView);
                     template_entries.emplace_back(offset, kVulkanObjectTypeImage, CastToUint64(wrapped_entry), 0);
@@ -693,7 +776,7 @@ void *BuildUnwrappedUpdateTemplateBuffer(ValidationObject *layer_data, uint64_t 
                     auto buffer_entry = reinterpret_cast<VkDescriptorBufferInfo *>(update_entry);
                     allocation_size = std::max(allocation_size, offset + sizeof(VkDescriptorBufferInfo));
 
-                    VkDescriptorBufferInfo *wrapped_entry = new VkDescriptorBufferInfo(*buffer_entry);
+                    VkDescriptorBufferInfo *wrapped_entry = new (pool) VkDescriptorBufferInfo(*buffer_entry);
                     wrapped_entry->buffer = layer_data->Unwrap(buffer_entry->buffer);
                     template_entries.emplace_back(offset, kVulkanObjectTypeBuffer, CastToUint64(wrapped_entry), 0);
                 } break;
@@ -753,6 +836,7 @@ void *BuildUnwrappedUpdateTemplateBuffer(ValidationObject *layer_data, uint64_t 
             }
         }
     }
+    pool.clear();
     return (void *)unwrapped_data;
 }
 
@@ -772,6 +856,7 @@ void DispatchUpdateDescriptorSetWithTemplate(VkDevice device, VkDescriptorSet de
     }
     layer_data->device_dispatch_table.UpdateDescriptorSetWithTemplate(device, descriptorSet, descriptorUpdateTemplate, unwrapped_buffer);
     free(unwrapped_buffer);
+    pool.clear();
 }
 
 void DispatchUpdateDescriptorSetWithTemplateKHR(VkDevice device, VkDescriptorSet descriptorSet,
@@ -790,6 +875,7 @@ void DispatchUpdateDescriptorSetWithTemplateKHR(VkDevice device, VkDescriptorSet
     }
     layer_data->device_dispatch_table.UpdateDescriptorSetWithTemplateKHR(device, descriptorSet, descriptorUpdateTemplate, unwrapped_buffer);
     free(unwrapped_buffer);
+    pool.clear();
 }
 
 void DispatchCmdPushDescriptorSetWithTemplateKHR(VkCommandBuffer commandBuffer,
@@ -810,6 +896,7 @@ void DispatchCmdPushDescriptorSetWithTemplateKHR(VkCommandBuffer commandBuffer,
     layer_data->device_dispatch_table.CmdPushDescriptorSetWithTemplateKHR(commandBuffer, descriptorUpdateTemplate, layout, set,
                                                                  unwrapped_buffer);
     free(unwrapped_buffer);
+    pool.clear();
 }
 
 VkResult DispatchGetPhysicalDeviceDisplayPropertiesKHR(VkPhysicalDevice physicalDevice, uint32_t *pPropertyCount,
@@ -823,6 +910,7 @@ VkResult DispatchGetPhysicalDeviceDisplayPropertiesKHR(VkPhysicalDevice physical
             pProperties[idx0].display = layer_data->MaybeWrapDisplay(pProperties[idx0].display, layer_data);
         }
     }
+    pool.clear();
     return result;
 }
 
@@ -838,6 +926,7 @@ VkResult DispatchGetPhysicalDeviceDisplayProperties2KHR(VkPhysicalDevice physica
                 layer_data->MaybeWrapDisplay(pProperties[idx0].displayProperties.display, layer_data);
         }
     }
+    pool.clear();
     return result;
 }
 
@@ -853,6 +942,7 @@ VkResult DispatchGetPhysicalDeviceDisplayPlanePropertiesKHR(VkPhysicalDevice phy
             if (opt_display) opt_display = layer_data->MaybeWrapDisplay(opt_display, layer_data);
         }
     }
+    pool.clear();
     return result;
 }
 
@@ -868,6 +958,7 @@ VkResult DispatchGetPhysicalDeviceDisplayPlaneProperties2KHR(VkPhysicalDevice ph
             if (opt_display) opt_display = layer_data->MaybeWrapDisplay(opt_display, layer_data);
         }
     }
+    pool.clear();
     return result;
 }
 
@@ -882,6 +973,7 @@ VkResult DispatchGetDisplayPlaneSupportedDisplaysKHR(VkPhysicalDevice physicalDe
             if (pDisplays[i]) pDisplays[i] = layer_data->MaybeWrapDisplay(pDisplays[i], layer_data);
         }
     }
+    pool.clear();
     return result;
 }
 
@@ -901,6 +993,7 @@ VkResult DispatchGetDisplayModePropertiesKHR(VkPhysicalDevice physicalDevice, Vk
             pProperties[idx0].displayMode = layer_data->WrapNew(pProperties[idx0].displayMode);
         }
     }
+    pool.clear();
     return result;
 }
 
@@ -921,6 +1014,7 @@ VkResult DispatchGetDisplayModeProperties2KHR(VkPhysicalDevice physicalDevice, V
             pProperties[idx0].displayModeProperties.displayMode = layer_data->WrapNew(pProperties[idx0].displayModeProperties.displayMode);
         }
     }
+    pool.clear();
     return result;
 }
 
@@ -936,6 +1030,7 @@ VkResult DispatchDebugMarkerSetObjectTagEXT(VkDevice device, const VkDebugMarker
     }
     VkResult result = layer_data->device_dispatch_table.DebugMarkerSetObjectTagEXT(device, 
                                                                                    reinterpret_cast<VkDebugMarkerObjectTagInfoEXT *>(&local_tag_info));
+    pool.clear();
     return result;
 }
 
@@ -951,6 +1046,7 @@ VkResult DispatchDebugMarkerSetObjectNameEXT(VkDevice device, const VkDebugMarke
     }
     VkResult result = layer_data->device_dispatch_table.DebugMarkerSetObjectNameEXT(
         device, reinterpret_cast<VkDebugMarkerObjectNameInfoEXT *>(&local_name_info));
+    pool.clear();
     return result;
 }
 
@@ -967,6 +1063,7 @@ VkResult DispatchSetDebugUtilsObjectTagEXT(VkDevice device, const VkDebugUtilsOb
     }
     VkResult result = layer_data->device_dispatch_table.SetDebugUtilsObjectTagEXT(
         device, reinterpret_cast<const VkDebugUtilsObjectTagInfoEXT *>(&local_tag_info));
+    pool.clear();
     return result;
 }
 
@@ -982,6 +1079,7 @@ VkResult DispatchSetDebugUtilsObjectNameEXT(VkDevice device, const VkDebugUtilsO
     }
     VkResult result = layer_data->device_dispatch_table.SetDebugUtilsObjectNameEXT(
         device, reinterpret_cast<const VkDebugUtilsObjectNameInfoEXT *>(&local_name_info));
+    pool.clear();
     return result;
 }
 
@@ -1114,6 +1212,7 @@ VkResult DispatchSetDebugUtilsObjectNameEXT(VkDevice device, const VkDebugUtilsO
             write(self.inline_copyright_message, file=self.outFile)
             self.newline()
             write('#include <mutex>', file=self.outFile)
+            write('#include <vector>', file=self.outFile)
             write('#include "chassis.h"', file=self.outFile)
             write('#include "layer_chassis_dispatch.h"', file=self.outFile)
             write('#include "vk_layer_utils.h"', file=self.outFile)
@@ -1469,7 +1568,7 @@ VkResult DispatchSetDebugUtilsObjectNameEXT(VkDevice device, const VkDebugUtilsO
             pre_call_code += '%s    if (%s%s) {\n' % (indent, prefix, ndo_name)
             indent = self.incIndent(indent)
             if top_level == True:
-                pre_call_code += '%s    local_%s%s = new %s[%s];\n' % (indent, prefix, ndo_name, ndo_type, ndo_count)
+                pre_call_code += '%s    local_%s%s = new (pool) %s[%s];\n' % (indent, prefix, ndo_name, ndo_type, ndo_count)
                 pre_call_code += '%s    for (uint32_t %s = 0; %s < %s; ++%s) {\n' % (indent, index, index, ndo_count, index)
                 indent = self.incIndent(indent)
                 pre_call_code += '%s    local_%s%s[%s] = layer_data->Unwrap(%s[%s]);\n' % (indent, prefix, ndo_name, index, ndo_name, index)
@@ -1544,7 +1643,7 @@ VkResult DispatchSetDebugUtilsObjectNameEXT(VkDevice device, const VkDebugUtilsO
                         pre_code += '%s    if (%s%s) {\n' % (indent, prefix, member.name)
                         indent = self.incIndent(indent)
                         if first_level_param == True:
-                            pre_code += '%s    %s = new safe_%s[%s];\n' % (indent, new_prefix, member.type, member.len)
+                            pre_code += '%s    %s = new (pool) safe_%s[%s];\n' % (indent, new_prefix, member.type, member.len)
                         pre_code += '%s    for (uint32_t %s = 0; %s < %s%s; ++%s) {\n' % (indent, index, index, prefix, member.len, index)
                         indent = self.incIndent(indent)
                         if first_level_param == True:
@@ -1575,7 +1674,7 @@ VkResult DispatchSetDebugUtilsObjectNameEXT(VkDevice device, const VkDebugUtilsO
                         pre_code += '%s    if (%s%s) {\n' % (indent, prefix, member.name)
                         indent = self.incIndent(indent)
                         if first_level_param == True:
-                            pre_code += '%s    local_%s%s = new safe_%s(%s);\n' % (indent, prefix, member.name, member.type, member.name)
+                            pre_code += '%s    local_%s%s = new (pool) safe_%s(%s);\n' % (indent, prefix, member.name, member.type, member.name)
                         # Process sub-structs in this struct
                         (tmp_decl, tmp_pre, tmp_post) = self.uniquify_members(struct_info, indent, new_prefix, array_index, create_func, destroy_func, destroy_array, False)
                         decls += tmp_decl
@@ -1795,6 +1894,8 @@ VkResult DispatchSetDebugUtilsObjectNameEXT(VkDevice device, const VkDebugUtilsO
             # And add the post-API-call codegen
             self.appendSection('source_file', "\n".join(str(api_post).rstrip().split("\n")))
             # Handle the return result variable, if any
+
+            self.appendSection('source_file', '    pool.clear();')
             if (resulttype is not None):
                 self.appendSection('source_file', '    return result;')
             self.appendSection('source_file', '}')

@@ -23,6 +23,7 @@
  */
 
 #include <mutex>
+#include <vector>
 #include "chassis.h"
 #include "layer_chassis_dispatch.h"
 #include "vk_layer_utils.h"
@@ -160,6 +161,70 @@ void WrapPnextChainHandles(ValidationObject *layer_data, const void *pNext) {
 
 // Manually written Dispatch routines
 
+
+class ThreadPool {
+    uint64_t arena[0x1000 / sizeof(uint64_t)];
+    std::vector<void *> other_allocs;
+    size_t cursor;
+
+public:
+    ThreadPool() : cursor(0) {}
+
+    void clear()
+    {
+        if (other_allocs.size()) {
+            for (auto ptr : other_allocs) {
+                free(ptr);
+            }
+            other_allocs.clear();
+        }
+        cursor = 0;
+    }
+
+    void *alloc(size_t count)
+    {
+        if (count == 0) {
+            return nullptr;
+        }
+        if (cursor + count <= sizeof(arena)) {
+            void *ret = &arena[cursor];
+            cursor += count;
+            return ret;
+        }
+        void *ret = malloc(count);
+        other_allocs.push_back(ret);
+        return ret;
+    }
+};
+
+thread_local ThreadPool pool;
+
+void *operator new (size_t count, ThreadPool &pool)
+{
+    return pool.alloc(count);
+}
+
+void *operator new[](size_t count, ThreadPool &pool)
+{
+    return pool.alloc(count);
+}
+
+void operator delete(void *ptr)
+{
+}
+
+void operator delete[](void *ptr)
+{
+}
+
+void operator delete(void *ptr, ThreadPool &pool)
+{
+}
+
+void operator delete[](void *ptr, ThreadPool &pool)
+{
+}
+
 VkResult DispatchCreateComputePipelines(VkDevice device, VkPipelineCache pipelineCache, uint32_t createInfoCount,
                                         const VkComputePipelineCreateInfo *pCreateInfos,
                                         const VkAllocationCallbacks *pAllocator, VkPipeline *pPipelines) {
@@ -168,7 +233,7 @@ VkResult DispatchCreateComputePipelines(VkDevice device, VkPipelineCache pipelin
                                                                                           pCreateInfos, pAllocator, pPipelines);
     safe_VkComputePipelineCreateInfo *local_pCreateInfos = NULL;
     if (pCreateInfos) {
-        local_pCreateInfos = new safe_VkComputePipelineCreateInfo[createInfoCount];
+        local_pCreateInfos = new (pool) safe_VkComputePipelineCreateInfo[createInfoCount];
         for (uint32_t idx0 = 0; idx0 < createInfoCount; ++idx0) {
             local_pCreateInfos[idx0].initialize(&pCreateInfos[idx0]);
             if (pCreateInfos[idx0].basePipelineHandle) {
@@ -196,6 +261,7 @@ VkResult DispatchCreateComputePipelines(VkDevice device, VkPipelineCache pipelin
             }
         }
     }
+    pool.clear();
     return result;
 }
 
@@ -207,7 +273,7 @@ VkResult DispatchCreateGraphicsPipelines(VkDevice device, VkPipelineCache pipeli
                                                                                            pCreateInfos, pAllocator, pPipelines);
     safe_VkGraphicsPipelineCreateInfo *local_pCreateInfos = nullptr;
     if (pCreateInfos) {
-        local_pCreateInfos = new safe_VkGraphicsPipelineCreateInfo[createInfoCount];
+        local_pCreateInfos = new (pool) safe_VkGraphicsPipelineCreateInfo[createInfoCount];
         read_dispatch_lock_guard_t lock(dispatch_lock);
         for (uint32_t idx0 = 0; idx0 < createInfoCount; ++idx0) {
             bool uses_color_attachment = false;
@@ -257,6 +323,7 @@ VkResult DispatchCreateGraphicsPipelines(VkDevice device, VkPipelineCache pipeli
             }
         }
     }
+    pool.clear();
     return result;
 }
 
@@ -277,6 +344,7 @@ static void UpdateCreateRenderPassState(ValidationObject *layer_data, const T *p
         if (uses_color) renderpass_state.subpasses_using_color_attachment.insert(subpass);
         if (uses_depthstencil) renderpass_state.subpasses_using_depthstencil_attachment.insert(subpass);
     }
+    pool.clear();
 }
 
 VkResult DispatchCreateRenderPass(VkDevice device, const VkRenderPassCreateInfo *pCreateInfo,
@@ -289,6 +357,7 @@ VkResult DispatchCreateRenderPass(VkDevice device, const VkRenderPassCreateInfo 
         UpdateCreateRenderPassState(layer_data, pCreateInfo, *pRenderPass);
         *pRenderPass = layer_data->WrapNew(*pRenderPass);
     }
+    pool.clear();
     return result;
 }
 
@@ -302,6 +371,7 @@ VkResult DispatchCreateRenderPass2KHR(VkDevice device, const VkRenderPassCreateI
         UpdateCreateRenderPassState(layer_data, pCreateInfo, *pRenderPass);
         *pRenderPass = layer_data->WrapNew(*pRenderPass);
     }
+    pool.clear();
     return result;
 }
 
@@ -321,6 +391,7 @@ void DispatchDestroyRenderPass(VkDevice device, VkRenderPass renderPass, const V
 
     write_dispatch_lock_guard_t lock(dispatch_lock);
     layer_data->renderpasses_states.erase(renderPass);
+    pool.clear();
 }
 
 VkResult DispatchCreateSwapchainKHR(VkDevice device, const VkSwapchainCreateInfoKHR *pCreateInfo,
@@ -329,7 +400,7 @@ VkResult DispatchCreateSwapchainKHR(VkDevice device, const VkSwapchainCreateInfo
     if (!wrap_handles) return layer_data->device_dispatch_table.CreateSwapchainKHR(device, pCreateInfo, pAllocator, pSwapchain);
     safe_VkSwapchainCreateInfoKHR *local_pCreateInfo = NULL;
     if (pCreateInfo) {
-        local_pCreateInfo = new safe_VkSwapchainCreateInfoKHR(pCreateInfo);
+        local_pCreateInfo = new (pool) safe_VkSwapchainCreateInfoKHR(pCreateInfo);
         local_pCreateInfo->oldSwapchain = layer_data->Unwrap(pCreateInfo->oldSwapchain);
         // Surface is instance-level object
         local_pCreateInfo->surface = layer_data->Unwrap(pCreateInfo->surface);
@@ -341,6 +412,7 @@ VkResult DispatchCreateSwapchainKHR(VkDevice device, const VkSwapchainCreateInfo
     if (VK_SUCCESS == result) {
         *pSwapchain = layer_data->WrapNew(*pSwapchain);
     }
+    pool.clear();
     return result;
 }
 
@@ -353,7 +425,7 @@ VkResult DispatchCreateSharedSwapchainsKHR(VkDevice device, uint32_t swapchainCo
     safe_VkSwapchainCreateInfoKHR *local_pCreateInfos = NULL;
     {
         if (pCreateInfos) {
-            local_pCreateInfos = new safe_VkSwapchainCreateInfoKHR[swapchainCount];
+            local_pCreateInfos = new (pool) safe_VkSwapchainCreateInfoKHR[swapchainCount];
             for (uint32_t i = 0; i < swapchainCount; ++i) {
                 local_pCreateInfos[i].initialize(&pCreateInfos[i]);
                 if (pCreateInfos[i].surface) {
@@ -374,6 +446,7 @@ VkResult DispatchCreateSharedSwapchainsKHR(VkDevice device, uint32_t swapchainCo
             pSwapchains[i] = layer_data->WrapNew(pSwapchains[i]);
         }
     }
+    pool.clear();
     return result;
 }
 
@@ -400,6 +473,7 @@ VkResult DispatchGetSwapchainImagesKHR(VkDevice device, VkSwapchainKHR swapchain
             }
         }
     }
+    pool.clear();
     return result;
 }
 
@@ -425,6 +499,7 @@ void DispatchDestroySwapchainKHR(VkDevice device, VkSwapchainKHR swapchain, cons
     }
 
     layer_data->device_dispatch_table.DestroySwapchainKHR(device, swapchain, pAllocator);
+    pool.clear();
 }
 
 VkResult DispatchQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR *pPresentInfo) {
@@ -433,7 +508,7 @@ VkResult DispatchQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR *pPresent
     safe_VkPresentInfoKHR *local_pPresentInfo = NULL;
     {
         if (pPresentInfo) {
-            local_pPresentInfo = new safe_VkPresentInfoKHR(pPresentInfo);
+            local_pPresentInfo = new (pool) safe_VkPresentInfoKHR(pPresentInfo);
             if (local_pPresentInfo->pWaitSemaphores) {
                 for (uint32_t index1 = 0; index1 < local_pPresentInfo->waitSemaphoreCount; ++index1) {
                     local_pPresentInfo->pWaitSemaphores[index1] = layer_data->Unwrap(pPresentInfo->pWaitSemaphores[index1]);
@@ -456,6 +531,7 @@ VkResult DispatchQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR *pPresent
         }
     }
     delete local_pPresentInfo;
+    pool.clear();
     return result;
 }
 
@@ -481,6 +557,7 @@ void DispatchDestroyDescriptorPool(VkDevice device, VkDescriptorPool descriptorP
     }
 
     layer_data->device_dispatch_table.DestroyDescriptorPool(device, descriptorPool, pAllocator);
+    pool.clear();
 }
 
 VkResult DispatchResetDescriptorPool(VkDevice device, VkDescriptorPool descriptorPool, VkDescriptorPoolResetFlags flags) {
@@ -500,6 +577,7 @@ VkResult DispatchResetDescriptorPool(VkDevice device, VkDescriptorPool descripto
         layer_data->pool_descriptor_sets_map[descriptorPool].clear();
     }
 
+    pool.clear();
     return result;
 }
 
@@ -510,7 +588,7 @@ VkResult DispatchAllocateDescriptorSets(VkDevice device, const VkDescriptorSetAl
     safe_VkDescriptorSetAllocateInfo *local_pAllocateInfo = NULL;
     {
         if (pAllocateInfo) {
-            local_pAllocateInfo = new safe_VkDescriptorSetAllocateInfo(pAllocateInfo);
+            local_pAllocateInfo = new (pool) safe_VkDescriptorSetAllocateInfo(pAllocateInfo);
             if (pAllocateInfo->descriptorPool) {
                 local_pAllocateInfo->descriptorPool = layer_data->Unwrap(pAllocateInfo->descriptorPool);
             }
@@ -534,6 +612,7 @@ VkResult DispatchAllocateDescriptorSets(VkDevice device, const VkDescriptorSetAl
             pool_descriptor_sets.insert(pDescriptorSets[index0]);
         }
     }
+    pool.clear();
     return result;
 }
 
@@ -547,7 +626,7 @@ VkResult DispatchFreeDescriptorSets(VkDevice device, VkDescriptorPool descriptor
     {
         local_descriptor_pool = layer_data->Unwrap(descriptorPool);
         if (pDescriptorSets) {
-            local_pDescriptorSets = new VkDescriptorSet[descriptorSetCount];
+            local_pDescriptorSets = new (pool) VkDescriptorSet[descriptorSetCount];
             for (uint32_t index0 = 0; index0 < descriptorSetCount; ++index0) {
                 local_pDescriptorSets[index0] = layer_data->Unwrap(pDescriptorSets[index0]);
             }
@@ -566,6 +645,7 @@ VkResult DispatchFreeDescriptorSets(VkDevice device, VkDescriptorPool descriptor
             unique_id_mapping.erase(unique_id);
         }
     }
+    pool.clear();
     return result;
 }
 
@@ -580,7 +660,7 @@ VkResult DispatchCreateDescriptorUpdateTemplate(VkDevice device, const VkDescrip
     safe_VkDescriptorUpdateTemplateCreateInfo *local_create_info = NULL;
     {
         if (pCreateInfo) {
-            local_create_info = new safe_VkDescriptorUpdateTemplateCreateInfo(pCreateInfo);
+            local_create_info = new (pool) safe_VkDescriptorUpdateTemplateCreateInfo(pCreateInfo);
             if (pCreateInfo->descriptorSetLayout) {
                 local_create_info->descriptorSetLayout = layer_data->Unwrap(pCreateInfo->descriptorSetLayout);
             }
@@ -596,9 +676,10 @@ VkResult DispatchCreateDescriptorUpdateTemplate(VkDevice device, const VkDescrip
         *pDescriptorUpdateTemplate = layer_data->WrapNew(*pDescriptorUpdateTemplate);
 
         // Shadow template createInfo for later updates
-        std::unique_ptr<TEMPLATE_STATE> template_state(new TEMPLATE_STATE(*pDescriptorUpdateTemplate, local_create_info));
+        std::unique_ptr<TEMPLATE_STATE> template_state(new (pool) TEMPLATE_STATE(*pDescriptorUpdateTemplate, local_create_info));
         layer_data->desc_template_createinfo_map[(uint64_t)*pDescriptorUpdateTemplate] = std::move(template_state);
     }
+    pool.clear();
     return result;
 }
 
@@ -613,7 +694,7 @@ VkResult DispatchCreateDescriptorUpdateTemplateKHR(VkDevice device, const VkDesc
     safe_VkDescriptorUpdateTemplateCreateInfo *local_create_info = NULL;
     {
         if (pCreateInfo) {
-            local_create_info = new safe_VkDescriptorUpdateTemplateCreateInfo(pCreateInfo);
+            local_create_info = new (pool) safe_VkDescriptorUpdateTemplateCreateInfo(pCreateInfo);
             if (pCreateInfo->descriptorSetLayout) {
                 local_create_info->descriptorSetLayout = layer_data->Unwrap(pCreateInfo->descriptorSetLayout);
             }
@@ -629,9 +710,10 @@ VkResult DispatchCreateDescriptorUpdateTemplateKHR(VkDevice device, const VkDesc
         *pDescriptorUpdateTemplate = layer_data->WrapNew(*pDescriptorUpdateTemplate);
 
         // Shadow template createInfo for later updates
-        std::unique_ptr<TEMPLATE_STATE> template_state(new TEMPLATE_STATE(*pDescriptorUpdateTemplate, local_create_info));
+        std::unique_ptr<TEMPLATE_STATE> template_state(new (pool) TEMPLATE_STATE(*pDescriptorUpdateTemplate, local_create_info));
         layer_data->desc_template_createinfo_map[(uint64_t)*pDescriptorUpdateTemplate] = std::move(template_state);
     }
+    pool.clear();
     return result;
 }
 
@@ -654,6 +736,7 @@ void DispatchDestroyDescriptorUpdateTemplate(VkDevice device, VkDescriptorUpdate
     }
 
     layer_data->device_dispatch_table.DestroyDescriptorUpdateTemplate(device, descriptorUpdateTemplate, pAllocator);
+    pool.clear();
 }
 
 // This is the extension version of this routine.  The core version is above.
@@ -675,6 +758,7 @@ void DispatchDestroyDescriptorUpdateTemplateKHR(VkDevice device, VkDescriptorUpd
     }
 
     layer_data->device_dispatch_table.DestroyDescriptorUpdateTemplateKHR(device, descriptorUpdateTemplate, pAllocator);
+    pool.clear();
 }
 
 void *BuildUnwrappedUpdateTemplateBuffer(ValidationObject *layer_data, uint64_t descriptorUpdateTemplate, const void *pData) {
@@ -700,7 +784,7 @@ void *BuildUnwrappedUpdateTemplateBuffer(ValidationObject *layer_data, uint64_t 
                     auto image_entry = reinterpret_cast<VkDescriptorImageInfo *>(update_entry);
                     allocation_size = std::max(allocation_size, offset + sizeof(VkDescriptorImageInfo));
 
-                    VkDescriptorImageInfo *wrapped_entry = new VkDescriptorImageInfo(*image_entry);
+                    VkDescriptorImageInfo *wrapped_entry = new (pool) VkDescriptorImageInfo(*image_entry);
                     wrapped_entry->sampler = layer_data->Unwrap(image_entry->sampler);
                     wrapped_entry->imageView = layer_data->Unwrap(image_entry->imageView);
                     template_entries.emplace_back(offset, kVulkanObjectTypeImage, CastToUint64(wrapped_entry), 0);
@@ -713,7 +797,7 @@ void *BuildUnwrappedUpdateTemplateBuffer(ValidationObject *layer_data, uint64_t 
                     auto buffer_entry = reinterpret_cast<VkDescriptorBufferInfo *>(update_entry);
                     allocation_size = std::max(allocation_size, offset + sizeof(VkDescriptorBufferInfo));
 
-                    VkDescriptorBufferInfo *wrapped_entry = new VkDescriptorBufferInfo(*buffer_entry);
+                    VkDescriptorBufferInfo *wrapped_entry = new (pool) VkDescriptorBufferInfo(*buffer_entry);
                     wrapped_entry->buffer = layer_data->Unwrap(buffer_entry->buffer);
                     template_entries.emplace_back(offset, kVulkanObjectTypeBuffer, CastToUint64(wrapped_entry), 0);
                 } break;
@@ -773,6 +857,7 @@ void *BuildUnwrappedUpdateTemplateBuffer(ValidationObject *layer_data, uint64_t 
             }
         }
     }
+    pool.clear();
     return (void *)unwrapped_data;
 }
 
@@ -792,6 +877,7 @@ void DispatchUpdateDescriptorSetWithTemplate(VkDevice device, VkDescriptorSet de
     }
     layer_data->device_dispatch_table.UpdateDescriptorSetWithTemplate(device, descriptorSet, descriptorUpdateTemplate, unwrapped_buffer);
     free(unwrapped_buffer);
+    pool.clear();
 }
 
 void DispatchUpdateDescriptorSetWithTemplateKHR(VkDevice device, VkDescriptorSet descriptorSet,
@@ -810,6 +896,7 @@ void DispatchUpdateDescriptorSetWithTemplateKHR(VkDevice device, VkDescriptorSet
     }
     layer_data->device_dispatch_table.UpdateDescriptorSetWithTemplateKHR(device, descriptorSet, descriptorUpdateTemplate, unwrapped_buffer);
     free(unwrapped_buffer);
+    pool.clear();
 }
 
 void DispatchCmdPushDescriptorSetWithTemplateKHR(VkCommandBuffer commandBuffer,
@@ -830,6 +917,7 @@ void DispatchCmdPushDescriptorSetWithTemplateKHR(VkCommandBuffer commandBuffer,
     layer_data->device_dispatch_table.CmdPushDescriptorSetWithTemplateKHR(commandBuffer, descriptorUpdateTemplate, layout, set,
                                                                  unwrapped_buffer);
     free(unwrapped_buffer);
+    pool.clear();
 }
 
 VkResult DispatchGetPhysicalDeviceDisplayPropertiesKHR(VkPhysicalDevice physicalDevice, uint32_t *pPropertyCount,
@@ -843,6 +931,7 @@ VkResult DispatchGetPhysicalDeviceDisplayPropertiesKHR(VkPhysicalDevice physical
             pProperties[idx0].display = layer_data->MaybeWrapDisplay(pProperties[idx0].display, layer_data);
         }
     }
+    pool.clear();
     return result;
 }
 
@@ -858,6 +947,7 @@ VkResult DispatchGetPhysicalDeviceDisplayProperties2KHR(VkPhysicalDevice physica
                 layer_data->MaybeWrapDisplay(pProperties[idx0].displayProperties.display, layer_data);
         }
     }
+    pool.clear();
     return result;
 }
 
@@ -873,6 +963,7 @@ VkResult DispatchGetPhysicalDeviceDisplayPlanePropertiesKHR(VkPhysicalDevice phy
             if (opt_display) opt_display = layer_data->MaybeWrapDisplay(opt_display, layer_data);
         }
     }
+    pool.clear();
     return result;
 }
 
@@ -888,6 +979,7 @@ VkResult DispatchGetPhysicalDeviceDisplayPlaneProperties2KHR(VkPhysicalDevice ph
             if (opt_display) opt_display = layer_data->MaybeWrapDisplay(opt_display, layer_data);
         }
     }
+    pool.clear();
     return result;
 }
 
@@ -902,6 +994,7 @@ VkResult DispatchGetDisplayPlaneSupportedDisplaysKHR(VkPhysicalDevice physicalDe
             if (pDisplays[i]) pDisplays[i] = layer_data->MaybeWrapDisplay(pDisplays[i], layer_data);
         }
     }
+    pool.clear();
     return result;
 }
 
@@ -921,6 +1014,7 @@ VkResult DispatchGetDisplayModePropertiesKHR(VkPhysicalDevice physicalDevice, Vk
             pProperties[idx0].displayMode = layer_data->WrapNew(pProperties[idx0].displayMode);
         }
     }
+    pool.clear();
     return result;
 }
 
@@ -941,6 +1035,7 @@ VkResult DispatchGetDisplayModeProperties2KHR(VkPhysicalDevice physicalDevice, V
             pProperties[idx0].displayModeProperties.displayMode = layer_data->WrapNew(pProperties[idx0].displayModeProperties.displayMode);
         }
     }
+    pool.clear();
     return result;
 }
 
@@ -956,6 +1051,7 @@ VkResult DispatchDebugMarkerSetObjectTagEXT(VkDevice device, const VkDebugMarker
     }
     VkResult result = layer_data->device_dispatch_table.DebugMarkerSetObjectTagEXT(device, 
                                                                                    reinterpret_cast<VkDebugMarkerObjectTagInfoEXT *>(&local_tag_info));
+    pool.clear();
     return result;
 }
 
@@ -971,6 +1067,7 @@ VkResult DispatchDebugMarkerSetObjectNameEXT(VkDevice device, const VkDebugMarke
     }
     VkResult result = layer_data->device_dispatch_table.DebugMarkerSetObjectNameEXT(
         device, reinterpret_cast<VkDebugMarkerObjectNameInfoEXT *>(&local_name_info));
+    pool.clear();
     return result;
 }
 
@@ -987,6 +1084,7 @@ VkResult DispatchSetDebugUtilsObjectTagEXT(VkDevice device, const VkDebugUtilsOb
     }
     VkResult result = layer_data->device_dispatch_table.SetDebugUtilsObjectTagEXT(
         device, reinterpret_cast<const VkDebugUtilsObjectTagInfoEXT *>(&local_tag_info));
+    pool.clear();
     return result;
 }
 
@@ -1002,6 +1100,7 @@ VkResult DispatchSetDebugUtilsObjectNameEXT(VkDevice device, const VkDebugUtilsO
     }
     VkResult result = layer_data->device_dispatch_table.SetDebugUtilsObjectNameEXT(
         device, reinterpret_cast<const VkDebugUtilsObjectNameInfoEXT *>(&local_name_info));
+    pool.clear();
     return result;
 }
 
@@ -1020,6 +1119,7 @@ VkResult DispatchEnumeratePhysicalDevices(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(instance), layer_data_map);
     VkResult result = layer_data->instance_dispatch_table.EnumeratePhysicalDevices(instance, pPhysicalDeviceCount, pPhysicalDevices);
 
+    pool.clear();
     return result;
 }
 
@@ -1030,6 +1130,7 @@ void DispatchGetPhysicalDeviceFeatures(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(physicalDevice), layer_data_map);
     layer_data->instance_dispatch_table.GetPhysicalDeviceFeatures(physicalDevice, pFeatures);
 
+    pool.clear();
 }
 
 void DispatchGetPhysicalDeviceFormatProperties(
@@ -1040,6 +1141,7 @@ void DispatchGetPhysicalDeviceFormatProperties(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(physicalDevice), layer_data_map);
     layer_data->instance_dispatch_table.GetPhysicalDeviceFormatProperties(physicalDevice, format, pFormatProperties);
 
+    pool.clear();
 }
 
 VkResult DispatchGetPhysicalDeviceImageFormatProperties(
@@ -1054,6 +1156,7 @@ VkResult DispatchGetPhysicalDeviceImageFormatProperties(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(physicalDevice), layer_data_map);
     VkResult result = layer_data->instance_dispatch_table.GetPhysicalDeviceImageFormatProperties(physicalDevice, format, type, tiling, usage, flags, pImageFormatProperties);
 
+    pool.clear();
     return result;
 }
 
@@ -1064,6 +1167,7 @@ void DispatchGetPhysicalDeviceProperties(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(physicalDevice), layer_data_map);
     layer_data->instance_dispatch_table.GetPhysicalDeviceProperties(physicalDevice, pProperties);
 
+    pool.clear();
 }
 
 void DispatchGetPhysicalDeviceQueueFamilyProperties(
@@ -1074,6 +1178,7 @@ void DispatchGetPhysicalDeviceQueueFamilyProperties(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(physicalDevice), layer_data_map);
     layer_data->instance_dispatch_table.GetPhysicalDeviceQueueFamilyProperties(physicalDevice, pQueueFamilyPropertyCount, pQueueFamilyProperties);
 
+    pool.clear();
 }
 
 void DispatchGetPhysicalDeviceMemoryProperties(
@@ -1083,6 +1188,7 @@ void DispatchGetPhysicalDeviceMemoryProperties(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(physicalDevice), layer_data_map);
     layer_data->instance_dispatch_table.GetPhysicalDeviceMemoryProperties(physicalDevice, pMemoryProperties);
 
+    pool.clear();
 }
 
 PFN_vkVoidFunction DispatchGetInstanceProcAddr(
@@ -1092,6 +1198,7 @@ PFN_vkVoidFunction DispatchGetInstanceProcAddr(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(instance), layer_data_map);
     PFN_vkVoidFunction result = layer_data->instance_dispatch_table.GetInstanceProcAddr(instance, pName);
 
+    pool.clear();
     return result;
 }
 
@@ -1102,6 +1209,7 @@ PFN_vkVoidFunction DispatchGetDeviceProcAddr(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(device), layer_data_map);
     PFN_vkVoidFunction result = layer_data->device_dispatch_table.GetDeviceProcAddr(device, pName);
 
+    pool.clear();
     return result;
 }
 
@@ -1126,6 +1234,7 @@ void DispatchGetDeviceQueue(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(device), layer_data_map);
     layer_data->device_dispatch_table.GetDeviceQueue(device, queueFamilyIndex, queueIndex, pQueue);
 
+    pool.clear();
 }
 
 VkResult DispatchQueueSubmit(
@@ -1139,7 +1248,7 @@ VkResult DispatchQueueSubmit(
     safe_VkSubmitInfo *local_pSubmits = NULL;
     {
         if (pSubmits) {
-            local_pSubmits = new safe_VkSubmitInfo[submitCount];
+            local_pSubmits = new (pool) safe_VkSubmitInfo[submitCount];
             for (uint32_t index0 = 0; index0 < submitCount; ++index0) {
                 local_pSubmits[index0].initialize(&pSubmits[index0]);
                 WrapPnextChainHandles(layer_data, local_pSubmits[index0].pNext);
@@ -1161,6 +1270,7 @@ VkResult DispatchQueueSubmit(
     if (local_pSubmits) {
         delete[] local_pSubmits;
     }
+    pool.clear();
     return result;
 }
 
@@ -1170,6 +1280,7 @@ VkResult DispatchQueueWaitIdle(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(queue), layer_data_map);
     VkResult result = layer_data->device_dispatch_table.QueueWaitIdle(queue);
 
+    pool.clear();
     return result;
 }
 
@@ -1179,6 +1290,7 @@ VkResult DispatchDeviceWaitIdle(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(device), layer_data_map);
     VkResult result = layer_data->device_dispatch_table.DeviceWaitIdle(device);
 
+    pool.clear();
     return result;
 }
 
@@ -1193,7 +1305,7 @@ VkResult DispatchAllocateMemory(
     safe_VkMemoryAllocateInfo *local_pAllocateInfo = NULL;
     {
         if (pAllocateInfo) {
-            local_pAllocateInfo = new safe_VkMemoryAllocateInfo(pAllocateInfo);
+            local_pAllocateInfo = new (pool) safe_VkMemoryAllocateInfo(pAllocateInfo);
             WrapPnextChainHandles(layer_data, local_pAllocateInfo->pNext);
         }
     }
@@ -1204,6 +1316,7 @@ VkResult DispatchAllocateMemory(
     if (VK_SUCCESS == result) {
         *pMemory = layer_data->WrapNew(*pMemory);
     }
+    pool.clear();
     return result;
 }
 
@@ -1223,6 +1336,7 @@ void DispatchFreeMemory(
     }
     layer_data->device_dispatch_table.FreeMemory(device, memory, pAllocator);
 
+    pool.clear();
 }
 
 VkResult DispatchMapMemory(
@@ -1240,6 +1354,7 @@ VkResult DispatchMapMemory(
     }
     VkResult result = layer_data->device_dispatch_table.MapMemory(device, memory, offset, size, flags, ppData);
 
+    pool.clear();
     return result;
 }
 
@@ -1254,6 +1369,7 @@ void DispatchUnmapMemory(
     }
     layer_data->device_dispatch_table.UnmapMemory(device, memory);
 
+    pool.clear();
 }
 
 VkResult DispatchFlushMappedMemoryRanges(
@@ -1266,7 +1382,7 @@ VkResult DispatchFlushMappedMemoryRanges(
     safe_VkMappedMemoryRange *local_pMemoryRanges = NULL;
     {
         if (pMemoryRanges) {
-            local_pMemoryRanges = new safe_VkMappedMemoryRange[memoryRangeCount];
+            local_pMemoryRanges = new (pool) safe_VkMappedMemoryRange[memoryRangeCount];
             for (uint32_t index0 = 0; index0 < memoryRangeCount; ++index0) {
                 local_pMemoryRanges[index0].initialize(&pMemoryRanges[index0]);
                 if (pMemoryRanges[index0].memory) {
@@ -1279,6 +1395,7 @@ VkResult DispatchFlushMappedMemoryRanges(
     if (local_pMemoryRanges) {
         delete[] local_pMemoryRanges;
     }
+    pool.clear();
     return result;
 }
 
@@ -1292,7 +1409,7 @@ VkResult DispatchInvalidateMappedMemoryRanges(
     safe_VkMappedMemoryRange *local_pMemoryRanges = NULL;
     {
         if (pMemoryRanges) {
-            local_pMemoryRanges = new safe_VkMappedMemoryRange[memoryRangeCount];
+            local_pMemoryRanges = new (pool) safe_VkMappedMemoryRange[memoryRangeCount];
             for (uint32_t index0 = 0; index0 < memoryRangeCount; ++index0) {
                 local_pMemoryRanges[index0].initialize(&pMemoryRanges[index0]);
                 if (pMemoryRanges[index0].memory) {
@@ -1305,6 +1422,7 @@ VkResult DispatchInvalidateMappedMemoryRanges(
     if (local_pMemoryRanges) {
         delete[] local_pMemoryRanges;
     }
+    pool.clear();
     return result;
 }
 
@@ -1320,6 +1438,7 @@ void DispatchGetDeviceMemoryCommitment(
     }
     layer_data->device_dispatch_table.GetDeviceMemoryCommitment(device, memory, pCommittedMemoryInBytes);
 
+    pool.clear();
 }
 
 VkResult DispatchBindBufferMemory(
@@ -1336,6 +1455,7 @@ VkResult DispatchBindBufferMemory(
     }
     VkResult result = layer_data->device_dispatch_table.BindBufferMemory(device, buffer, memory, memoryOffset);
 
+    pool.clear();
     return result;
 }
 
@@ -1353,6 +1473,7 @@ VkResult DispatchBindImageMemory(
     }
     VkResult result = layer_data->device_dispatch_table.BindImageMemory(device, image, memory, memoryOffset);
 
+    pool.clear();
     return result;
 }
 
@@ -1368,6 +1489,7 @@ void DispatchGetBufferMemoryRequirements(
     }
     layer_data->device_dispatch_table.GetBufferMemoryRequirements(device, buffer, pMemoryRequirements);
 
+    pool.clear();
 }
 
 void DispatchGetImageMemoryRequirements(
@@ -1382,6 +1504,7 @@ void DispatchGetImageMemoryRequirements(
     }
     layer_data->device_dispatch_table.GetImageMemoryRequirements(device, image, pMemoryRequirements);
 
+    pool.clear();
 }
 
 void DispatchGetImageSparseMemoryRequirements(
@@ -1397,6 +1520,7 @@ void DispatchGetImageSparseMemoryRequirements(
     }
     layer_data->device_dispatch_table.GetImageSparseMemoryRequirements(device, image, pSparseMemoryRequirementCount, pSparseMemoryRequirements);
 
+    pool.clear();
 }
 
 void DispatchGetPhysicalDeviceSparseImageFormatProperties(
@@ -1412,6 +1536,7 @@ void DispatchGetPhysicalDeviceSparseImageFormatProperties(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(physicalDevice), layer_data_map);
     layer_data->instance_dispatch_table.GetPhysicalDeviceSparseImageFormatProperties(physicalDevice, format, type, samples, usage, tiling, pPropertyCount, pProperties);
 
+    pool.clear();
 }
 
 VkResult DispatchQueueBindSparse(
@@ -1425,7 +1550,7 @@ VkResult DispatchQueueBindSparse(
     safe_VkBindSparseInfo *local_pBindInfo = NULL;
     {
         if (pBindInfo) {
-            local_pBindInfo = new safe_VkBindSparseInfo[bindInfoCount];
+            local_pBindInfo = new (pool) safe_VkBindSparseInfo[bindInfoCount];
             for (uint32_t index0 = 0; index0 < bindInfoCount; ++index0) {
                 local_pBindInfo[index0].initialize(&pBindInfo[index0]);
                 if (local_pBindInfo[index0].pWaitSemaphores) {
@@ -1488,6 +1613,7 @@ VkResult DispatchQueueBindSparse(
     if (local_pBindInfo) {
         delete[] local_pBindInfo;
     }
+    pool.clear();
     return result;
 }
 
@@ -1503,6 +1629,7 @@ VkResult DispatchCreateFence(
     if (VK_SUCCESS == result) {
         *pFence = layer_data->WrapNew(*pFence);
     }
+    pool.clear();
     return result;
 }
 
@@ -1522,6 +1649,7 @@ void DispatchDestroyFence(
     }
     layer_data->device_dispatch_table.DestroyFence(device, fence, pAllocator);
 
+    pool.clear();
 }
 
 VkResult DispatchResetFences(
@@ -1534,7 +1662,7 @@ VkResult DispatchResetFences(
     VkFence *local_pFences = NULL;
     {
         if (pFences) {
-            local_pFences = new VkFence[fenceCount];
+            local_pFences = new (pool) VkFence[fenceCount];
             for (uint32_t index0 = 0; index0 < fenceCount; ++index0) {
                 local_pFences[index0] = layer_data->Unwrap(pFences[index0]);
             }
@@ -1543,6 +1671,7 @@ VkResult DispatchResetFences(
     VkResult result = layer_data->device_dispatch_table.ResetFences(device, fenceCount, (const VkFence*)local_pFences);
     if (local_pFences)
         delete[] local_pFences;
+    pool.clear();
     return result;
 }
 
@@ -1557,6 +1686,7 @@ VkResult DispatchGetFenceStatus(
     }
     VkResult result = layer_data->device_dispatch_table.GetFenceStatus(device, fence);
 
+    pool.clear();
     return result;
 }
 
@@ -1572,7 +1702,7 @@ VkResult DispatchWaitForFences(
     VkFence *local_pFences = NULL;
     {
         if (pFences) {
-            local_pFences = new VkFence[fenceCount];
+            local_pFences = new (pool) VkFence[fenceCount];
             for (uint32_t index0 = 0; index0 < fenceCount; ++index0) {
                 local_pFences[index0] = layer_data->Unwrap(pFences[index0]);
             }
@@ -1581,6 +1711,7 @@ VkResult DispatchWaitForFences(
     VkResult result = layer_data->device_dispatch_table.WaitForFences(device, fenceCount, (const VkFence*)local_pFences, waitAll, timeout);
     if (local_pFences)
         delete[] local_pFences;
+    pool.clear();
     return result;
 }
 
@@ -1596,6 +1727,7 @@ VkResult DispatchCreateSemaphore(
     if (VK_SUCCESS == result) {
         *pSemaphore = layer_data->WrapNew(*pSemaphore);
     }
+    pool.clear();
     return result;
 }
 
@@ -1615,6 +1747,7 @@ void DispatchDestroySemaphore(
     }
     layer_data->device_dispatch_table.DestroySemaphore(device, semaphore, pAllocator);
 
+    pool.clear();
 }
 
 VkResult DispatchCreateEvent(
@@ -1629,6 +1762,7 @@ VkResult DispatchCreateEvent(
     if (VK_SUCCESS == result) {
         *pEvent = layer_data->WrapNew(*pEvent);
     }
+    pool.clear();
     return result;
 }
 
@@ -1648,6 +1782,7 @@ void DispatchDestroyEvent(
     }
     layer_data->device_dispatch_table.DestroyEvent(device, event, pAllocator);
 
+    pool.clear();
 }
 
 VkResult DispatchGetEventStatus(
@@ -1661,6 +1796,7 @@ VkResult DispatchGetEventStatus(
     }
     VkResult result = layer_data->device_dispatch_table.GetEventStatus(device, event);
 
+    pool.clear();
     return result;
 }
 
@@ -1675,6 +1811,7 @@ VkResult DispatchSetEvent(
     }
     VkResult result = layer_data->device_dispatch_table.SetEvent(device, event);
 
+    pool.clear();
     return result;
 }
 
@@ -1689,6 +1826,7 @@ VkResult DispatchResetEvent(
     }
     VkResult result = layer_data->device_dispatch_table.ResetEvent(device, event);
 
+    pool.clear();
     return result;
 }
 
@@ -1704,6 +1842,7 @@ VkResult DispatchCreateQueryPool(
     if (VK_SUCCESS == result) {
         *pQueryPool = layer_data->WrapNew(*pQueryPool);
     }
+    pool.clear();
     return result;
 }
 
@@ -1723,6 +1862,7 @@ void DispatchDestroyQueryPool(
     }
     layer_data->device_dispatch_table.DestroyQueryPool(device, queryPool, pAllocator);
 
+    pool.clear();
 }
 
 VkResult DispatchGetQueryPoolResults(
@@ -1742,6 +1882,7 @@ VkResult DispatchGetQueryPoolResults(
     }
     VkResult result = layer_data->device_dispatch_table.GetQueryPoolResults(device, queryPool, firstQuery, queryCount, dataSize, pData, stride, flags);
 
+    pool.clear();
     return result;
 }
 
@@ -1757,6 +1898,7 @@ VkResult DispatchCreateBuffer(
     if (VK_SUCCESS == result) {
         *pBuffer = layer_data->WrapNew(*pBuffer);
     }
+    pool.clear();
     return result;
 }
 
@@ -1776,6 +1918,7 @@ void DispatchDestroyBuffer(
     }
     layer_data->device_dispatch_table.DestroyBuffer(device, buffer, pAllocator);
 
+    pool.clear();
 }
 
 VkResult DispatchCreateBufferView(
@@ -1789,7 +1932,7 @@ VkResult DispatchCreateBufferView(
     safe_VkBufferViewCreateInfo *local_pCreateInfo = NULL;
     {
         if (pCreateInfo) {
-            local_pCreateInfo = new safe_VkBufferViewCreateInfo(pCreateInfo);
+            local_pCreateInfo = new (pool) safe_VkBufferViewCreateInfo(pCreateInfo);
             if (pCreateInfo->buffer) {
                 local_pCreateInfo->buffer = layer_data->Unwrap(pCreateInfo->buffer);
             }
@@ -1802,6 +1945,7 @@ VkResult DispatchCreateBufferView(
     if (VK_SUCCESS == result) {
         *pView = layer_data->WrapNew(*pView);
     }
+    pool.clear();
     return result;
 }
 
@@ -1821,6 +1965,7 @@ void DispatchDestroyBufferView(
     }
     layer_data->device_dispatch_table.DestroyBufferView(device, bufferView, pAllocator);
 
+    pool.clear();
 }
 
 VkResult DispatchCreateImage(
@@ -1834,7 +1979,7 @@ VkResult DispatchCreateImage(
     safe_VkImageCreateInfo *local_pCreateInfo = NULL;
     {
         if (pCreateInfo) {
-            local_pCreateInfo = new safe_VkImageCreateInfo(pCreateInfo);
+            local_pCreateInfo = new (pool) safe_VkImageCreateInfo(pCreateInfo);
             WrapPnextChainHandles(layer_data, local_pCreateInfo->pNext);
         }
     }
@@ -1845,6 +1990,7 @@ VkResult DispatchCreateImage(
     if (VK_SUCCESS == result) {
         *pImage = layer_data->WrapNew(*pImage);
     }
+    pool.clear();
     return result;
 }
 
@@ -1864,6 +2010,7 @@ void DispatchDestroyImage(
     }
     layer_data->device_dispatch_table.DestroyImage(device, image, pAllocator);
 
+    pool.clear();
 }
 
 void DispatchGetImageSubresourceLayout(
@@ -1879,6 +2026,7 @@ void DispatchGetImageSubresourceLayout(
     }
     layer_data->device_dispatch_table.GetImageSubresourceLayout(device, image, pSubresource, pLayout);
 
+    pool.clear();
 }
 
 VkResult DispatchCreateImageView(
@@ -1892,7 +2040,7 @@ VkResult DispatchCreateImageView(
     safe_VkImageViewCreateInfo *local_pCreateInfo = NULL;
     {
         if (pCreateInfo) {
-            local_pCreateInfo = new safe_VkImageViewCreateInfo(pCreateInfo);
+            local_pCreateInfo = new (pool) safe_VkImageViewCreateInfo(pCreateInfo);
             if (pCreateInfo->image) {
                 local_pCreateInfo->image = layer_data->Unwrap(pCreateInfo->image);
             }
@@ -1906,6 +2054,7 @@ VkResult DispatchCreateImageView(
     if (VK_SUCCESS == result) {
         *pView = layer_data->WrapNew(*pView);
     }
+    pool.clear();
     return result;
 }
 
@@ -1925,6 +2074,7 @@ void DispatchDestroyImageView(
     }
     layer_data->device_dispatch_table.DestroyImageView(device, imageView, pAllocator);
 
+    pool.clear();
 }
 
 VkResult DispatchCreateShaderModule(
@@ -1938,7 +2088,7 @@ VkResult DispatchCreateShaderModule(
     safe_VkShaderModuleCreateInfo *local_pCreateInfo = NULL;
     {
         if (pCreateInfo) {
-            local_pCreateInfo = new safe_VkShaderModuleCreateInfo(pCreateInfo);
+            local_pCreateInfo = new (pool) safe_VkShaderModuleCreateInfo(pCreateInfo);
             WrapPnextChainHandles(layer_data, local_pCreateInfo->pNext);
         }
     }
@@ -1949,6 +2099,7 @@ VkResult DispatchCreateShaderModule(
     if (VK_SUCCESS == result) {
         *pShaderModule = layer_data->WrapNew(*pShaderModule);
     }
+    pool.clear();
     return result;
 }
 
@@ -1968,6 +2119,7 @@ void DispatchDestroyShaderModule(
     }
     layer_data->device_dispatch_table.DestroyShaderModule(device, shaderModule, pAllocator);
 
+    pool.clear();
 }
 
 VkResult DispatchCreatePipelineCache(
@@ -1982,6 +2134,7 @@ VkResult DispatchCreatePipelineCache(
     if (VK_SUCCESS == result) {
         *pPipelineCache = layer_data->WrapNew(*pPipelineCache);
     }
+    pool.clear();
     return result;
 }
 
@@ -2001,6 +2154,7 @@ void DispatchDestroyPipelineCache(
     }
     layer_data->device_dispatch_table.DestroyPipelineCache(device, pipelineCache, pAllocator);
 
+    pool.clear();
 }
 
 VkResult DispatchGetPipelineCacheData(
@@ -2016,6 +2170,7 @@ VkResult DispatchGetPipelineCacheData(
     }
     VkResult result = layer_data->device_dispatch_table.GetPipelineCacheData(device, pipelineCache, pDataSize, pData);
 
+    pool.clear();
     return result;
 }
 
@@ -2031,7 +2186,7 @@ VkResult DispatchMergePipelineCaches(
     {
         dstCache = layer_data->Unwrap(dstCache);
         if (pSrcCaches) {
-            local_pSrcCaches = new VkPipelineCache[srcCacheCount];
+            local_pSrcCaches = new (pool) VkPipelineCache[srcCacheCount];
             for (uint32_t index0 = 0; index0 < srcCacheCount; ++index0) {
                 local_pSrcCaches[index0] = layer_data->Unwrap(pSrcCaches[index0]);
             }
@@ -2040,6 +2195,7 @@ VkResult DispatchMergePipelineCaches(
     VkResult result = layer_data->device_dispatch_table.MergePipelineCaches(device, dstCache, srcCacheCount, (const VkPipelineCache*)local_pSrcCaches);
     if (local_pSrcCaches)
         delete[] local_pSrcCaches;
+    pool.clear();
     return result;
 }
 
@@ -2063,6 +2219,7 @@ void DispatchDestroyPipeline(
     }
     layer_data->device_dispatch_table.DestroyPipeline(device, pipeline, pAllocator);
 
+    pool.clear();
 }
 
 VkResult DispatchCreatePipelineLayout(
@@ -2076,7 +2233,7 @@ VkResult DispatchCreatePipelineLayout(
     safe_VkPipelineLayoutCreateInfo *local_pCreateInfo = NULL;
     {
         if (pCreateInfo) {
-            local_pCreateInfo = new safe_VkPipelineLayoutCreateInfo(pCreateInfo);
+            local_pCreateInfo = new (pool) safe_VkPipelineLayoutCreateInfo(pCreateInfo);
             if (local_pCreateInfo->pSetLayouts) {
                 for (uint32_t index1 = 0; index1 < local_pCreateInfo->setLayoutCount; ++index1) {
                     local_pCreateInfo->pSetLayouts[index1] = layer_data->Unwrap(local_pCreateInfo->pSetLayouts[index1]);
@@ -2091,6 +2248,7 @@ VkResult DispatchCreatePipelineLayout(
     if (VK_SUCCESS == result) {
         *pPipelineLayout = layer_data->WrapNew(*pPipelineLayout);
     }
+    pool.clear();
     return result;
 }
 
@@ -2110,6 +2268,7 @@ void DispatchDestroyPipelineLayout(
     }
     layer_data->device_dispatch_table.DestroyPipelineLayout(device, pipelineLayout, pAllocator);
 
+    pool.clear();
 }
 
 VkResult DispatchCreateSampler(
@@ -2123,7 +2282,7 @@ VkResult DispatchCreateSampler(
     safe_VkSamplerCreateInfo *local_pCreateInfo = NULL;
     {
         if (pCreateInfo) {
-            local_pCreateInfo = new safe_VkSamplerCreateInfo(pCreateInfo);
+            local_pCreateInfo = new (pool) safe_VkSamplerCreateInfo(pCreateInfo);
             WrapPnextChainHandles(layer_data, local_pCreateInfo->pNext);
         }
     }
@@ -2134,6 +2293,7 @@ VkResult DispatchCreateSampler(
     if (VK_SUCCESS == result) {
         *pSampler = layer_data->WrapNew(*pSampler);
     }
+    pool.clear();
     return result;
 }
 
@@ -2153,6 +2313,7 @@ void DispatchDestroySampler(
     }
     layer_data->device_dispatch_table.DestroySampler(device, sampler, pAllocator);
 
+    pool.clear();
 }
 
 VkResult DispatchCreateDescriptorSetLayout(
@@ -2166,7 +2327,7 @@ VkResult DispatchCreateDescriptorSetLayout(
     safe_VkDescriptorSetLayoutCreateInfo *local_pCreateInfo = NULL;
     {
         if (pCreateInfo) {
-            local_pCreateInfo = new safe_VkDescriptorSetLayoutCreateInfo(pCreateInfo);
+            local_pCreateInfo = new (pool) safe_VkDescriptorSetLayoutCreateInfo(pCreateInfo);
             if (local_pCreateInfo->pBindings) {
                 for (uint32_t index1 = 0; index1 < local_pCreateInfo->bindingCount; ++index1) {
                     if (local_pCreateInfo->pBindings[index1].pImmutableSamplers) {
@@ -2185,6 +2346,7 @@ VkResult DispatchCreateDescriptorSetLayout(
     if (VK_SUCCESS == result) {
         *pSetLayout = layer_data->WrapNew(*pSetLayout);
     }
+    pool.clear();
     return result;
 }
 
@@ -2204,6 +2366,7 @@ void DispatchDestroyDescriptorSetLayout(
     }
     layer_data->device_dispatch_table.DestroyDescriptorSetLayout(device, descriptorSetLayout, pAllocator);
 
+    pool.clear();
 }
 
 VkResult DispatchCreateDescriptorPool(
@@ -2218,6 +2381,7 @@ VkResult DispatchCreateDescriptorPool(
     if (VK_SUCCESS == result) {
         *pDescriptorPool = layer_data->WrapNew(*pDescriptorPool);
     }
+    pool.clear();
     return result;
 }
 
@@ -2242,7 +2406,7 @@ void DispatchUpdateDescriptorSets(
     safe_VkCopyDescriptorSet *local_pDescriptorCopies = NULL;
     {
         if (pDescriptorWrites) {
-            local_pDescriptorWrites = new safe_VkWriteDescriptorSet[descriptorWriteCount];
+            local_pDescriptorWrites = new (pool) safe_VkWriteDescriptorSet[descriptorWriteCount];
             for (uint32_t index0 = 0; index0 < descriptorWriteCount; ++index0) {
                 local_pDescriptorWrites[index0].initialize(&pDescriptorWrites[index0]);
                 WrapPnextChainHandles(layer_data, local_pDescriptorWrites[index0].pNext);
@@ -2274,7 +2438,7 @@ void DispatchUpdateDescriptorSets(
             }
         }
         if (pDescriptorCopies) {
-            local_pDescriptorCopies = new safe_VkCopyDescriptorSet[descriptorCopyCount];
+            local_pDescriptorCopies = new (pool) safe_VkCopyDescriptorSet[descriptorCopyCount];
             for (uint32_t index0 = 0; index0 < descriptorCopyCount; ++index0) {
                 local_pDescriptorCopies[index0].initialize(&pDescriptorCopies[index0]);
                 if (pDescriptorCopies[index0].srcSet) {
@@ -2293,6 +2457,7 @@ void DispatchUpdateDescriptorSets(
     if (local_pDescriptorCopies) {
         delete[] local_pDescriptorCopies;
     }
+    pool.clear();
 }
 
 VkResult DispatchCreateFramebuffer(
@@ -2306,7 +2471,7 @@ VkResult DispatchCreateFramebuffer(
     safe_VkFramebufferCreateInfo *local_pCreateInfo = NULL;
     {
         if (pCreateInfo) {
-            local_pCreateInfo = new safe_VkFramebufferCreateInfo(pCreateInfo);
+            local_pCreateInfo = new (pool) safe_VkFramebufferCreateInfo(pCreateInfo);
             if (pCreateInfo->renderPass) {
                 local_pCreateInfo->renderPass = layer_data->Unwrap(pCreateInfo->renderPass);
             }
@@ -2324,6 +2489,7 @@ VkResult DispatchCreateFramebuffer(
     if (VK_SUCCESS == result) {
         *pFramebuffer = layer_data->WrapNew(*pFramebuffer);
     }
+    pool.clear();
     return result;
 }
 
@@ -2343,6 +2509,7 @@ void DispatchDestroyFramebuffer(
     }
     layer_data->device_dispatch_table.DestroyFramebuffer(device, framebuffer, pAllocator);
 
+    pool.clear();
 }
 
 // Skip vkCreateRenderPass dispatch, manually generated
@@ -2361,6 +2528,7 @@ void DispatchGetRenderAreaGranularity(
     }
     layer_data->device_dispatch_table.GetRenderAreaGranularity(device, renderPass, pGranularity);
 
+    pool.clear();
 }
 
 VkResult DispatchCreateCommandPool(
@@ -2375,6 +2543,7 @@ VkResult DispatchCreateCommandPool(
     if (VK_SUCCESS == result) {
         *pCommandPool = layer_data->WrapNew(*pCommandPool);
     }
+    pool.clear();
     return result;
 }
 
@@ -2394,6 +2563,7 @@ void DispatchDestroyCommandPool(
     }
     layer_data->device_dispatch_table.DestroyCommandPool(device, commandPool, pAllocator);
 
+    pool.clear();
 }
 
 VkResult DispatchResetCommandPool(
@@ -2408,6 +2578,7 @@ VkResult DispatchResetCommandPool(
     }
     VkResult result = layer_data->device_dispatch_table.ResetCommandPool(device, commandPool, flags);
 
+    pool.clear();
     return result;
 }
 
@@ -2421,7 +2592,7 @@ VkResult DispatchAllocateCommandBuffers(
     safe_VkCommandBufferAllocateInfo *local_pAllocateInfo = NULL;
     {
         if (pAllocateInfo) {
-            local_pAllocateInfo = new safe_VkCommandBufferAllocateInfo(pAllocateInfo);
+            local_pAllocateInfo = new (pool) safe_VkCommandBufferAllocateInfo(pAllocateInfo);
             if (pAllocateInfo->commandPool) {
                 local_pAllocateInfo->commandPool = layer_data->Unwrap(pAllocateInfo->commandPool);
             }
@@ -2431,6 +2602,7 @@ VkResult DispatchAllocateCommandBuffers(
     if (local_pAllocateInfo) {
         delete local_pAllocateInfo;
     }
+    pool.clear();
     return result;
 }
 
@@ -2447,6 +2619,7 @@ void DispatchFreeCommandBuffers(
     }
     layer_data->device_dispatch_table.FreeCommandBuffers(device, commandPool, commandBufferCount, pCommandBuffers);
 
+    pool.clear();
 }
 
 VkResult DispatchBeginCommandBuffer(
@@ -2458,7 +2631,7 @@ VkResult DispatchBeginCommandBuffer(
     safe_VkCommandBufferBeginInfo *local_pBeginInfo = NULL;
     {
         if (pBeginInfo) {
-            local_pBeginInfo = new safe_VkCommandBufferBeginInfo(pBeginInfo);
+            local_pBeginInfo = new (pool) safe_VkCommandBufferBeginInfo(pBeginInfo);
             if (local_pBeginInfo->pInheritanceInfo) {
                 if (pBeginInfo->pInheritanceInfo->renderPass) {
                     local_pBeginInfo->pInheritanceInfo->renderPass = layer_data->Unwrap(pBeginInfo->pInheritanceInfo->renderPass);
@@ -2473,6 +2646,7 @@ VkResult DispatchBeginCommandBuffer(
     if (local_pBeginInfo) {
         delete local_pBeginInfo;
     }
+    pool.clear();
     return result;
 }
 
@@ -2482,6 +2656,7 @@ VkResult DispatchEndCommandBuffer(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     VkResult result = layer_data->device_dispatch_table.EndCommandBuffer(commandBuffer);
 
+    pool.clear();
     return result;
 }
 
@@ -2492,6 +2667,7 @@ VkResult DispatchResetCommandBuffer(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     VkResult result = layer_data->device_dispatch_table.ResetCommandBuffer(commandBuffer, flags);
 
+    pool.clear();
     return result;
 }
 
@@ -2507,6 +2683,7 @@ void DispatchCmdBindPipeline(
     }
     layer_data->device_dispatch_table.CmdBindPipeline(commandBuffer, pipelineBindPoint, pipeline);
 
+    pool.clear();
 }
 
 void DispatchCmdSetViewport(
@@ -2518,6 +2695,7 @@ void DispatchCmdSetViewport(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     layer_data->device_dispatch_table.CmdSetViewport(commandBuffer, firstViewport, viewportCount, pViewports);
 
+    pool.clear();
 }
 
 void DispatchCmdSetScissor(
@@ -2529,6 +2707,7 @@ void DispatchCmdSetScissor(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     layer_data->device_dispatch_table.CmdSetScissor(commandBuffer, firstScissor, scissorCount, pScissors);
 
+    pool.clear();
 }
 
 void DispatchCmdSetLineWidth(
@@ -2538,6 +2717,7 @@ void DispatchCmdSetLineWidth(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     layer_data->device_dispatch_table.CmdSetLineWidth(commandBuffer, lineWidth);
 
+    pool.clear();
 }
 
 void DispatchCmdSetDepthBias(
@@ -2549,6 +2729,7 @@ void DispatchCmdSetDepthBias(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     layer_data->device_dispatch_table.CmdSetDepthBias(commandBuffer, depthBiasConstantFactor, depthBiasClamp, depthBiasSlopeFactor);
 
+    pool.clear();
 }
 
 void DispatchCmdSetBlendConstants(
@@ -2558,6 +2739,7 @@ void DispatchCmdSetBlendConstants(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     layer_data->device_dispatch_table.CmdSetBlendConstants(commandBuffer, blendConstants);
 
+    pool.clear();
 }
 
 void DispatchCmdSetDepthBounds(
@@ -2568,6 +2750,7 @@ void DispatchCmdSetDepthBounds(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     layer_data->device_dispatch_table.CmdSetDepthBounds(commandBuffer, minDepthBounds, maxDepthBounds);
 
+    pool.clear();
 }
 
 void DispatchCmdSetStencilCompareMask(
@@ -2578,6 +2761,7 @@ void DispatchCmdSetStencilCompareMask(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     layer_data->device_dispatch_table.CmdSetStencilCompareMask(commandBuffer, faceMask, compareMask);
 
+    pool.clear();
 }
 
 void DispatchCmdSetStencilWriteMask(
@@ -2588,6 +2772,7 @@ void DispatchCmdSetStencilWriteMask(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     layer_data->device_dispatch_table.CmdSetStencilWriteMask(commandBuffer, faceMask, writeMask);
 
+    pool.clear();
 }
 
 void DispatchCmdSetStencilReference(
@@ -2598,6 +2783,7 @@ void DispatchCmdSetStencilReference(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     layer_data->device_dispatch_table.CmdSetStencilReference(commandBuffer, faceMask, reference);
 
+    pool.clear();
 }
 
 void DispatchCmdBindDescriptorSets(
@@ -2616,7 +2802,7 @@ void DispatchCmdBindDescriptorSets(
     {
         layout = layer_data->Unwrap(layout);
         if (pDescriptorSets) {
-            local_pDescriptorSets = new VkDescriptorSet[descriptorSetCount];
+            local_pDescriptorSets = new (pool) VkDescriptorSet[descriptorSetCount];
             for (uint32_t index0 = 0; index0 < descriptorSetCount; ++index0) {
                 local_pDescriptorSets[index0] = layer_data->Unwrap(pDescriptorSets[index0]);
             }
@@ -2625,6 +2811,7 @@ void DispatchCmdBindDescriptorSets(
     layer_data->device_dispatch_table.CmdBindDescriptorSets(commandBuffer, pipelineBindPoint, layout, firstSet, descriptorSetCount, (const VkDescriptorSet*)local_pDescriptorSets, dynamicOffsetCount, pDynamicOffsets);
     if (local_pDescriptorSets)
         delete[] local_pDescriptorSets;
+    pool.clear();
 }
 
 void DispatchCmdBindIndexBuffer(
@@ -2640,6 +2827,7 @@ void DispatchCmdBindIndexBuffer(
     }
     layer_data->device_dispatch_table.CmdBindIndexBuffer(commandBuffer, buffer, offset, indexType);
 
+    pool.clear();
 }
 
 void DispatchCmdBindVertexBuffers(
@@ -2654,7 +2842,7 @@ void DispatchCmdBindVertexBuffers(
     VkBuffer *local_pBuffers = NULL;
     {
         if (pBuffers) {
-            local_pBuffers = new VkBuffer[bindingCount];
+            local_pBuffers = new (pool) VkBuffer[bindingCount];
             for (uint32_t index0 = 0; index0 < bindingCount; ++index0) {
                 local_pBuffers[index0] = layer_data->Unwrap(pBuffers[index0]);
             }
@@ -2663,6 +2851,7 @@ void DispatchCmdBindVertexBuffers(
     layer_data->device_dispatch_table.CmdBindVertexBuffers(commandBuffer, firstBinding, bindingCount, (const VkBuffer*)local_pBuffers, pOffsets);
     if (local_pBuffers)
         delete[] local_pBuffers;
+    pool.clear();
 }
 
 void DispatchCmdDraw(
@@ -2675,6 +2864,7 @@ void DispatchCmdDraw(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     layer_data->device_dispatch_table.CmdDraw(commandBuffer, vertexCount, instanceCount, firstVertex, firstInstance);
 
+    pool.clear();
 }
 
 void DispatchCmdDrawIndexed(
@@ -2688,6 +2878,7 @@ void DispatchCmdDrawIndexed(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     layer_data->device_dispatch_table.CmdDrawIndexed(commandBuffer, indexCount, instanceCount, firstIndex, vertexOffset, firstInstance);
 
+    pool.clear();
 }
 
 void DispatchCmdDrawIndirect(
@@ -2704,6 +2895,7 @@ void DispatchCmdDrawIndirect(
     }
     layer_data->device_dispatch_table.CmdDrawIndirect(commandBuffer, buffer, offset, drawCount, stride);
 
+    pool.clear();
 }
 
 void DispatchCmdDrawIndexedIndirect(
@@ -2720,6 +2912,7 @@ void DispatchCmdDrawIndexedIndirect(
     }
     layer_data->device_dispatch_table.CmdDrawIndexedIndirect(commandBuffer, buffer, offset, drawCount, stride);
 
+    pool.clear();
 }
 
 void DispatchCmdDispatch(
@@ -2731,6 +2924,7 @@ void DispatchCmdDispatch(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     layer_data->device_dispatch_table.CmdDispatch(commandBuffer, groupCountX, groupCountY, groupCountZ);
 
+    pool.clear();
 }
 
 void DispatchCmdDispatchIndirect(
@@ -2745,6 +2939,7 @@ void DispatchCmdDispatchIndirect(
     }
     layer_data->device_dispatch_table.CmdDispatchIndirect(commandBuffer, buffer, offset);
 
+    pool.clear();
 }
 
 void DispatchCmdCopyBuffer(
@@ -2762,6 +2957,7 @@ void DispatchCmdCopyBuffer(
     }
     layer_data->device_dispatch_table.CmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, regionCount, pRegions);
 
+    pool.clear();
 }
 
 void DispatchCmdCopyImage(
@@ -2781,6 +2977,7 @@ void DispatchCmdCopyImage(
     }
     layer_data->device_dispatch_table.CmdCopyImage(commandBuffer, srcImage, srcImageLayout, dstImage, dstImageLayout, regionCount, pRegions);
 
+    pool.clear();
 }
 
 void DispatchCmdBlitImage(
@@ -2801,6 +2998,7 @@ void DispatchCmdBlitImage(
     }
     layer_data->device_dispatch_table.CmdBlitImage(commandBuffer, srcImage, srcImageLayout, dstImage, dstImageLayout, regionCount, pRegions, filter);
 
+    pool.clear();
 }
 
 void DispatchCmdCopyBufferToImage(
@@ -2819,6 +3017,7 @@ void DispatchCmdCopyBufferToImage(
     }
     layer_data->device_dispatch_table.CmdCopyBufferToImage(commandBuffer, srcBuffer, dstImage, dstImageLayout, regionCount, pRegions);
 
+    pool.clear();
 }
 
 void DispatchCmdCopyImageToBuffer(
@@ -2837,6 +3036,7 @@ void DispatchCmdCopyImageToBuffer(
     }
     layer_data->device_dispatch_table.CmdCopyImageToBuffer(commandBuffer, srcImage, srcImageLayout, dstBuffer, regionCount, pRegions);
 
+    pool.clear();
 }
 
 void DispatchCmdUpdateBuffer(
@@ -2853,6 +3053,7 @@ void DispatchCmdUpdateBuffer(
     }
     layer_data->device_dispatch_table.CmdUpdateBuffer(commandBuffer, dstBuffer, dstOffset, dataSize, pData);
 
+    pool.clear();
 }
 
 void DispatchCmdFillBuffer(
@@ -2869,6 +3070,7 @@ void DispatchCmdFillBuffer(
     }
     layer_data->device_dispatch_table.CmdFillBuffer(commandBuffer, dstBuffer, dstOffset, size, data);
 
+    pool.clear();
 }
 
 void DispatchCmdClearColorImage(
@@ -2886,6 +3088,7 @@ void DispatchCmdClearColorImage(
     }
     layer_data->device_dispatch_table.CmdClearColorImage(commandBuffer, image, imageLayout, pColor, rangeCount, pRanges);
 
+    pool.clear();
 }
 
 void DispatchCmdClearDepthStencilImage(
@@ -2903,6 +3106,7 @@ void DispatchCmdClearDepthStencilImage(
     }
     layer_data->device_dispatch_table.CmdClearDepthStencilImage(commandBuffer, image, imageLayout, pDepthStencil, rangeCount, pRanges);
 
+    pool.clear();
 }
 
 void DispatchCmdClearAttachments(
@@ -2915,6 +3119,7 @@ void DispatchCmdClearAttachments(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     layer_data->device_dispatch_table.CmdClearAttachments(commandBuffer, attachmentCount, pAttachments, rectCount, pRects);
 
+    pool.clear();
 }
 
 void DispatchCmdResolveImage(
@@ -2934,6 +3139,7 @@ void DispatchCmdResolveImage(
     }
     layer_data->device_dispatch_table.CmdResolveImage(commandBuffer, srcImage, srcImageLayout, dstImage, dstImageLayout, regionCount, pRegions);
 
+    pool.clear();
 }
 
 void DispatchCmdSetEvent(
@@ -2948,6 +3154,7 @@ void DispatchCmdSetEvent(
     }
     layer_data->device_dispatch_table.CmdSetEvent(commandBuffer, event, stageMask);
 
+    pool.clear();
 }
 
 void DispatchCmdResetEvent(
@@ -2962,6 +3169,7 @@ void DispatchCmdResetEvent(
     }
     layer_data->device_dispatch_table.CmdResetEvent(commandBuffer, event, stageMask);
 
+    pool.clear();
 }
 
 void DispatchCmdWaitEvents(
@@ -2984,13 +3192,13 @@ void DispatchCmdWaitEvents(
     safe_VkImageMemoryBarrier *local_pImageMemoryBarriers = NULL;
     {
         if (pEvents) {
-            local_pEvents = new VkEvent[eventCount];
+            local_pEvents = new (pool) VkEvent[eventCount];
             for (uint32_t index0 = 0; index0 < eventCount; ++index0) {
                 local_pEvents[index0] = layer_data->Unwrap(pEvents[index0]);
             }
         }
         if (pBufferMemoryBarriers) {
-            local_pBufferMemoryBarriers = new safe_VkBufferMemoryBarrier[bufferMemoryBarrierCount];
+            local_pBufferMemoryBarriers = new (pool) safe_VkBufferMemoryBarrier[bufferMemoryBarrierCount];
             for (uint32_t index0 = 0; index0 < bufferMemoryBarrierCount; ++index0) {
                 local_pBufferMemoryBarriers[index0].initialize(&pBufferMemoryBarriers[index0]);
                 if (pBufferMemoryBarriers[index0].buffer) {
@@ -2999,7 +3207,7 @@ void DispatchCmdWaitEvents(
             }
         }
         if (pImageMemoryBarriers) {
-            local_pImageMemoryBarriers = new safe_VkImageMemoryBarrier[imageMemoryBarrierCount];
+            local_pImageMemoryBarriers = new (pool) safe_VkImageMemoryBarrier[imageMemoryBarrierCount];
             for (uint32_t index0 = 0; index0 < imageMemoryBarrierCount; ++index0) {
                 local_pImageMemoryBarriers[index0].initialize(&pImageMemoryBarriers[index0]);
                 if (pImageMemoryBarriers[index0].image) {
@@ -3017,6 +3225,7 @@ void DispatchCmdWaitEvents(
     if (local_pImageMemoryBarriers) {
         delete[] local_pImageMemoryBarriers;
     }
+    pool.clear();
 }
 
 void DispatchCmdPipelineBarrier(
@@ -3037,7 +3246,7 @@ void DispatchCmdPipelineBarrier(
     safe_VkImageMemoryBarrier *local_pImageMemoryBarriers = NULL;
     {
         if (pBufferMemoryBarriers) {
-            local_pBufferMemoryBarriers = new safe_VkBufferMemoryBarrier[bufferMemoryBarrierCount];
+            local_pBufferMemoryBarriers = new (pool) safe_VkBufferMemoryBarrier[bufferMemoryBarrierCount];
             for (uint32_t index0 = 0; index0 < bufferMemoryBarrierCount; ++index0) {
                 local_pBufferMemoryBarriers[index0].initialize(&pBufferMemoryBarriers[index0]);
                 if (pBufferMemoryBarriers[index0].buffer) {
@@ -3046,7 +3255,7 @@ void DispatchCmdPipelineBarrier(
             }
         }
         if (pImageMemoryBarriers) {
-            local_pImageMemoryBarriers = new safe_VkImageMemoryBarrier[imageMemoryBarrierCount];
+            local_pImageMemoryBarriers = new (pool) safe_VkImageMemoryBarrier[imageMemoryBarrierCount];
             for (uint32_t index0 = 0; index0 < imageMemoryBarrierCount; ++index0) {
                 local_pImageMemoryBarriers[index0].initialize(&pImageMemoryBarriers[index0]);
                 if (pImageMemoryBarriers[index0].image) {
@@ -3062,6 +3271,7 @@ void DispatchCmdPipelineBarrier(
     if (local_pImageMemoryBarriers) {
         delete[] local_pImageMemoryBarriers;
     }
+    pool.clear();
 }
 
 void DispatchCmdBeginQuery(
@@ -3077,6 +3287,7 @@ void DispatchCmdBeginQuery(
     }
     layer_data->device_dispatch_table.CmdBeginQuery(commandBuffer, queryPool, query, flags);
 
+    pool.clear();
 }
 
 void DispatchCmdEndQuery(
@@ -3091,6 +3302,7 @@ void DispatchCmdEndQuery(
     }
     layer_data->device_dispatch_table.CmdEndQuery(commandBuffer, queryPool, query);
 
+    pool.clear();
 }
 
 void DispatchCmdResetQueryPool(
@@ -3106,6 +3318,7 @@ void DispatchCmdResetQueryPool(
     }
     layer_data->device_dispatch_table.CmdResetQueryPool(commandBuffer, queryPool, firstQuery, queryCount);
 
+    pool.clear();
 }
 
 void DispatchCmdWriteTimestamp(
@@ -3121,6 +3334,7 @@ void DispatchCmdWriteTimestamp(
     }
     layer_data->device_dispatch_table.CmdWriteTimestamp(commandBuffer, pipelineStage, queryPool, query);
 
+    pool.clear();
 }
 
 void DispatchCmdCopyQueryPoolResults(
@@ -3141,6 +3355,7 @@ void DispatchCmdCopyQueryPoolResults(
     }
     layer_data->device_dispatch_table.CmdCopyQueryPoolResults(commandBuffer, queryPool, firstQuery, queryCount, dstBuffer, dstOffset, stride, flags);
 
+    pool.clear();
 }
 
 void DispatchCmdPushConstants(
@@ -3158,6 +3373,7 @@ void DispatchCmdPushConstants(
     }
     layer_data->device_dispatch_table.CmdPushConstants(commandBuffer, layout, stageFlags, offset, size, pValues);
 
+    pool.clear();
 }
 
 void DispatchCmdBeginRenderPass(
@@ -3170,7 +3386,7 @@ void DispatchCmdBeginRenderPass(
     safe_VkRenderPassBeginInfo *local_pRenderPassBegin = NULL;
     {
         if (pRenderPassBegin) {
-            local_pRenderPassBegin = new safe_VkRenderPassBeginInfo(pRenderPassBegin);
+            local_pRenderPassBegin = new (pool) safe_VkRenderPassBeginInfo(pRenderPassBegin);
             if (pRenderPassBegin->renderPass) {
                 local_pRenderPassBegin->renderPass = layer_data->Unwrap(pRenderPassBegin->renderPass);
             }
@@ -3184,6 +3400,7 @@ void DispatchCmdBeginRenderPass(
     if (local_pRenderPassBegin) {
         delete local_pRenderPassBegin;
     }
+    pool.clear();
 }
 
 void DispatchCmdNextSubpass(
@@ -3193,6 +3410,7 @@ void DispatchCmdNextSubpass(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     layer_data->device_dispatch_table.CmdNextSubpass(commandBuffer, contents);
 
+    pool.clear();
 }
 
 void DispatchCmdEndRenderPass(
@@ -3201,6 +3419,7 @@ void DispatchCmdEndRenderPass(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     layer_data->device_dispatch_table.CmdEndRenderPass(commandBuffer);
 
+    pool.clear();
 }
 
 void DispatchCmdExecuteCommands(
@@ -3211,6 +3430,7 @@ void DispatchCmdExecuteCommands(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     layer_data->device_dispatch_table.CmdExecuteCommands(commandBuffer, commandBufferCount, pCommandBuffers);
 
+    pool.clear();
 }
 
 // Skip vkEnumerateInstanceVersion dispatch, manually generated
@@ -3225,7 +3445,7 @@ VkResult DispatchBindBufferMemory2(
     safe_VkBindBufferMemoryInfo *local_pBindInfos = NULL;
     {
         if (pBindInfos) {
-            local_pBindInfos = new safe_VkBindBufferMemoryInfo[bindInfoCount];
+            local_pBindInfos = new (pool) safe_VkBindBufferMemoryInfo[bindInfoCount];
             for (uint32_t index0 = 0; index0 < bindInfoCount; ++index0) {
                 local_pBindInfos[index0].initialize(&pBindInfos[index0]);
                 if (pBindInfos[index0].buffer) {
@@ -3241,6 +3461,7 @@ VkResult DispatchBindBufferMemory2(
     if (local_pBindInfos) {
         delete[] local_pBindInfos;
     }
+    pool.clear();
     return result;
 }
 
@@ -3254,7 +3475,7 @@ VkResult DispatchBindImageMemory2(
     safe_VkBindImageMemoryInfo *local_pBindInfos = NULL;
     {
         if (pBindInfos) {
-            local_pBindInfos = new safe_VkBindImageMemoryInfo[bindInfoCount];
+            local_pBindInfos = new (pool) safe_VkBindImageMemoryInfo[bindInfoCount];
             for (uint32_t index0 = 0; index0 < bindInfoCount; ++index0) {
                 local_pBindInfos[index0].initialize(&pBindInfos[index0]);
                 WrapPnextChainHandles(layer_data, local_pBindInfos[index0].pNext);
@@ -3271,6 +3492,7 @@ VkResult DispatchBindImageMemory2(
     if (local_pBindInfos) {
         delete[] local_pBindInfos;
     }
+    pool.clear();
     return result;
 }
 
@@ -3284,6 +3506,7 @@ void DispatchGetDeviceGroupPeerMemoryFeatures(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(device), layer_data_map);
     layer_data->device_dispatch_table.GetDeviceGroupPeerMemoryFeatures(device, heapIndex, localDeviceIndex, remoteDeviceIndex, pPeerMemoryFeatures);
 
+    pool.clear();
 }
 
 void DispatchCmdSetDeviceMask(
@@ -3293,6 +3516,7 @@ void DispatchCmdSetDeviceMask(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     layer_data->device_dispatch_table.CmdSetDeviceMask(commandBuffer, deviceMask);
 
+    pool.clear();
 }
 
 void DispatchCmdDispatchBase(
@@ -3307,6 +3531,7 @@ void DispatchCmdDispatchBase(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     layer_data->device_dispatch_table.CmdDispatchBase(commandBuffer, baseGroupX, baseGroupY, baseGroupZ, groupCountX, groupCountY, groupCountZ);
 
+    pool.clear();
 }
 
 VkResult DispatchEnumeratePhysicalDeviceGroups(
@@ -3317,6 +3542,7 @@ VkResult DispatchEnumeratePhysicalDeviceGroups(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(instance), layer_data_map);
     VkResult result = layer_data->instance_dispatch_table.EnumeratePhysicalDeviceGroups(instance, pPhysicalDeviceGroupCount, pPhysicalDeviceGroupProperties);
 
+    pool.clear();
     return result;
 }
 
@@ -3330,7 +3556,7 @@ void DispatchGetImageMemoryRequirements2(
     safe_VkImageMemoryRequirementsInfo2 *local_pInfo = NULL;
     {
         if (pInfo) {
-            local_pInfo = new safe_VkImageMemoryRequirementsInfo2(pInfo);
+            local_pInfo = new (pool) safe_VkImageMemoryRequirementsInfo2(pInfo);
             if (pInfo->image) {
                 local_pInfo->image = layer_data->Unwrap(pInfo->image);
             }
@@ -3340,6 +3566,7 @@ void DispatchGetImageMemoryRequirements2(
     if (local_pInfo) {
         delete local_pInfo;
     }
+    pool.clear();
 }
 
 void DispatchGetBufferMemoryRequirements2(
@@ -3352,7 +3579,7 @@ void DispatchGetBufferMemoryRequirements2(
     safe_VkBufferMemoryRequirementsInfo2 *local_pInfo = NULL;
     {
         if (pInfo) {
-            local_pInfo = new safe_VkBufferMemoryRequirementsInfo2(pInfo);
+            local_pInfo = new (pool) safe_VkBufferMemoryRequirementsInfo2(pInfo);
             if (pInfo->buffer) {
                 local_pInfo->buffer = layer_data->Unwrap(pInfo->buffer);
             }
@@ -3362,6 +3589,7 @@ void DispatchGetBufferMemoryRequirements2(
     if (local_pInfo) {
         delete local_pInfo;
     }
+    pool.clear();
 }
 
 void DispatchGetImageSparseMemoryRequirements2(
@@ -3375,7 +3603,7 @@ void DispatchGetImageSparseMemoryRequirements2(
     safe_VkImageSparseMemoryRequirementsInfo2 *local_pInfo = NULL;
     {
         if (pInfo) {
-            local_pInfo = new safe_VkImageSparseMemoryRequirementsInfo2(pInfo);
+            local_pInfo = new (pool) safe_VkImageSparseMemoryRequirementsInfo2(pInfo);
             if (pInfo->image) {
                 local_pInfo->image = layer_data->Unwrap(pInfo->image);
             }
@@ -3385,6 +3613,7 @@ void DispatchGetImageSparseMemoryRequirements2(
     if (local_pInfo) {
         delete local_pInfo;
     }
+    pool.clear();
 }
 
 void DispatchGetPhysicalDeviceFeatures2(
@@ -3394,6 +3623,7 @@ void DispatchGetPhysicalDeviceFeatures2(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(physicalDevice), layer_data_map);
     layer_data->instance_dispatch_table.GetPhysicalDeviceFeatures2(physicalDevice, pFeatures);
 
+    pool.clear();
 }
 
 void DispatchGetPhysicalDeviceProperties2(
@@ -3403,6 +3633,7 @@ void DispatchGetPhysicalDeviceProperties2(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(physicalDevice), layer_data_map);
     layer_data->instance_dispatch_table.GetPhysicalDeviceProperties2(physicalDevice, pProperties);
 
+    pool.clear();
 }
 
 void DispatchGetPhysicalDeviceFormatProperties2(
@@ -3413,6 +3644,7 @@ void DispatchGetPhysicalDeviceFormatProperties2(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(physicalDevice), layer_data_map);
     layer_data->instance_dispatch_table.GetPhysicalDeviceFormatProperties2(physicalDevice, format, pFormatProperties);
 
+    pool.clear();
 }
 
 VkResult DispatchGetPhysicalDeviceImageFormatProperties2(
@@ -3425,7 +3657,7 @@ VkResult DispatchGetPhysicalDeviceImageFormatProperties2(
     safe_VkPhysicalDeviceImageFormatInfo2 *local_pImageFormatInfo = NULL;
     {
         if (pImageFormatInfo) {
-            local_pImageFormatInfo = new safe_VkPhysicalDeviceImageFormatInfo2(pImageFormatInfo);
+            local_pImageFormatInfo = new (pool) safe_VkPhysicalDeviceImageFormatInfo2(pImageFormatInfo);
             WrapPnextChainHandles(layer_data, local_pImageFormatInfo->pNext);
         }
     }
@@ -3433,6 +3665,7 @@ VkResult DispatchGetPhysicalDeviceImageFormatProperties2(
     if (local_pImageFormatInfo) {
         delete local_pImageFormatInfo;
     }
+    pool.clear();
     return result;
 }
 
@@ -3444,6 +3677,7 @@ void DispatchGetPhysicalDeviceQueueFamilyProperties2(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(physicalDevice), layer_data_map);
     layer_data->instance_dispatch_table.GetPhysicalDeviceQueueFamilyProperties2(physicalDevice, pQueueFamilyPropertyCount, pQueueFamilyProperties);
 
+    pool.clear();
 }
 
 void DispatchGetPhysicalDeviceMemoryProperties2(
@@ -3453,6 +3687,7 @@ void DispatchGetPhysicalDeviceMemoryProperties2(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(physicalDevice), layer_data_map);
     layer_data->instance_dispatch_table.GetPhysicalDeviceMemoryProperties2(physicalDevice, pMemoryProperties);
 
+    pool.clear();
 }
 
 void DispatchGetPhysicalDeviceSparseImageFormatProperties2(
@@ -3464,6 +3699,7 @@ void DispatchGetPhysicalDeviceSparseImageFormatProperties2(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(physicalDevice), layer_data_map);
     layer_data->instance_dispatch_table.GetPhysicalDeviceSparseImageFormatProperties2(physicalDevice, pFormatInfo, pPropertyCount, pProperties);
 
+    pool.clear();
 }
 
 void DispatchTrimCommandPool(
@@ -3478,6 +3714,7 @@ void DispatchTrimCommandPool(
     }
     layer_data->device_dispatch_table.TrimCommandPool(device, commandPool, flags);
 
+    pool.clear();
 }
 
 void DispatchGetDeviceQueue2(
@@ -3488,6 +3725,7 @@ void DispatchGetDeviceQueue2(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(device), layer_data_map);
     layer_data->device_dispatch_table.GetDeviceQueue2(device, pQueueInfo, pQueue);
 
+    pool.clear();
 }
 
 VkResult DispatchCreateSamplerYcbcrConversion(
@@ -3501,7 +3739,7 @@ VkResult DispatchCreateSamplerYcbcrConversion(
     safe_VkSamplerYcbcrConversionCreateInfo *local_pCreateInfo = NULL;
     {
         if (pCreateInfo) {
-            local_pCreateInfo = new safe_VkSamplerYcbcrConversionCreateInfo(pCreateInfo);
+            local_pCreateInfo = new (pool) safe_VkSamplerYcbcrConversionCreateInfo(pCreateInfo);
             WrapPnextChainHandles(layer_data, local_pCreateInfo->pNext);
         }
     }
@@ -3512,6 +3750,7 @@ VkResult DispatchCreateSamplerYcbcrConversion(
     if (VK_SUCCESS == result) {
         *pYcbcrConversion = layer_data->WrapNew(*pYcbcrConversion);
     }
+    pool.clear();
     return result;
 }
 
@@ -3531,6 +3770,7 @@ void DispatchDestroySamplerYcbcrConversion(
     }
     layer_data->device_dispatch_table.DestroySamplerYcbcrConversion(device, ycbcrConversion, pAllocator);
 
+    pool.clear();
 }
 
 // Skip vkCreateDescriptorUpdateTemplate dispatch, manually generated
@@ -3547,6 +3787,7 @@ void DispatchGetPhysicalDeviceExternalBufferProperties(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(physicalDevice), layer_data_map);
     layer_data->instance_dispatch_table.GetPhysicalDeviceExternalBufferProperties(physicalDevice, pExternalBufferInfo, pExternalBufferProperties);
 
+    pool.clear();
 }
 
 void DispatchGetPhysicalDeviceExternalFenceProperties(
@@ -3557,6 +3798,7 @@ void DispatchGetPhysicalDeviceExternalFenceProperties(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(physicalDevice), layer_data_map);
     layer_data->instance_dispatch_table.GetPhysicalDeviceExternalFenceProperties(physicalDevice, pExternalFenceInfo, pExternalFenceProperties);
 
+    pool.clear();
 }
 
 void DispatchGetPhysicalDeviceExternalSemaphoreProperties(
@@ -3567,6 +3809,7 @@ void DispatchGetPhysicalDeviceExternalSemaphoreProperties(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(physicalDevice), layer_data_map);
     layer_data->instance_dispatch_table.GetPhysicalDeviceExternalSemaphoreProperties(physicalDevice, pExternalSemaphoreInfo, pExternalSemaphoreProperties);
 
+    pool.clear();
 }
 
 void DispatchGetDescriptorSetLayoutSupport(
@@ -3579,7 +3822,7 @@ void DispatchGetDescriptorSetLayoutSupport(
     safe_VkDescriptorSetLayoutCreateInfo *local_pCreateInfo = NULL;
     {
         if (pCreateInfo) {
-            local_pCreateInfo = new safe_VkDescriptorSetLayoutCreateInfo(pCreateInfo);
+            local_pCreateInfo = new (pool) safe_VkDescriptorSetLayoutCreateInfo(pCreateInfo);
             if (local_pCreateInfo->pBindings) {
                 for (uint32_t index1 = 0; index1 < local_pCreateInfo->bindingCount; ++index1) {
                     if (local_pCreateInfo->pBindings[index1].pImmutableSamplers) {
@@ -3595,6 +3838,7 @@ void DispatchGetDescriptorSetLayoutSupport(
     if (local_pCreateInfo) {
         delete local_pCreateInfo;
     }
+    pool.clear();
 }
 
 void DispatchDestroySurfaceKHR(
@@ -3613,6 +3857,7 @@ void DispatchDestroySurfaceKHR(
     }
     layer_data->instance_dispatch_table.DestroySurfaceKHR(instance, surface, pAllocator);
 
+    pool.clear();
 }
 
 VkResult DispatchGetPhysicalDeviceSurfaceSupportKHR(
@@ -3628,6 +3873,7 @@ VkResult DispatchGetPhysicalDeviceSurfaceSupportKHR(
     }
     VkResult result = layer_data->instance_dispatch_table.GetPhysicalDeviceSurfaceSupportKHR(physicalDevice, queueFamilyIndex, surface, pSupported);
 
+    pool.clear();
     return result;
 }
 
@@ -3643,6 +3889,7 @@ VkResult DispatchGetPhysicalDeviceSurfaceCapabilitiesKHR(
     }
     VkResult result = layer_data->instance_dispatch_table.GetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, surface, pSurfaceCapabilities);
 
+    pool.clear();
     return result;
 }
 
@@ -3659,6 +3906,7 @@ VkResult DispatchGetPhysicalDeviceSurfaceFormatsKHR(
     }
     VkResult result = layer_data->instance_dispatch_table.GetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, pSurfaceFormatCount, pSurfaceFormats);
 
+    pool.clear();
     return result;
 }
 
@@ -3675,6 +3923,7 @@ VkResult DispatchGetPhysicalDeviceSurfacePresentModesKHR(
     }
     VkResult result = layer_data->instance_dispatch_table.GetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, pPresentModeCount, pPresentModes);
 
+    pool.clear();
     return result;
 }
 
@@ -3701,6 +3950,7 @@ VkResult DispatchAcquireNextImageKHR(
     }
     VkResult result = layer_data->device_dispatch_table.AcquireNextImageKHR(device, swapchain, timeout, semaphore, fence, pImageIndex);
 
+    pool.clear();
     return result;
 }
 
@@ -3713,6 +3963,7 @@ VkResult DispatchGetDeviceGroupPresentCapabilitiesKHR(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(device), layer_data_map);
     VkResult result = layer_data->device_dispatch_table.GetDeviceGroupPresentCapabilitiesKHR(device, pDeviceGroupPresentCapabilities);
 
+    pool.clear();
     return result;
 }
 
@@ -3728,6 +3979,7 @@ VkResult DispatchGetDeviceGroupSurfacePresentModesKHR(
     }
     VkResult result = layer_data->device_dispatch_table.GetDeviceGroupSurfacePresentModesKHR(device, surface, pModes);
 
+    pool.clear();
     return result;
 }
 
@@ -3744,6 +3996,7 @@ VkResult DispatchGetPhysicalDevicePresentRectanglesKHR(
     }
     VkResult result = layer_data->instance_dispatch_table.GetPhysicalDevicePresentRectanglesKHR(physicalDevice, surface, pRectCount, pRects);
 
+    pool.clear();
     return result;
 }
 
@@ -3757,7 +4010,7 @@ VkResult DispatchAcquireNextImage2KHR(
     safe_VkAcquireNextImageInfoKHR *local_pAcquireInfo = NULL;
     {
         if (pAcquireInfo) {
-            local_pAcquireInfo = new safe_VkAcquireNextImageInfoKHR(pAcquireInfo);
+            local_pAcquireInfo = new (pool) safe_VkAcquireNextImageInfoKHR(pAcquireInfo);
             if (pAcquireInfo->swapchain) {
                 local_pAcquireInfo->swapchain = layer_data->Unwrap(pAcquireInfo->swapchain);
             }
@@ -3773,6 +4026,7 @@ VkResult DispatchAcquireNextImage2KHR(
     if (local_pAcquireInfo) {
         delete local_pAcquireInfo;
     }
+    pool.clear();
     return result;
 }
 
@@ -3800,6 +4054,7 @@ VkResult DispatchCreateDisplayModeKHR(
     if (VK_SUCCESS == result) {
         *pMode = layer_data->WrapNew(*pMode);
     }
+    pool.clear();
     return result;
 }
 
@@ -3816,6 +4071,7 @@ VkResult DispatchGetDisplayPlaneCapabilitiesKHR(
     }
     VkResult result = layer_data->instance_dispatch_table.GetDisplayPlaneCapabilitiesKHR(physicalDevice, mode, planeIndex, pCapabilities);
 
+    pool.clear();
     return result;
 }
 
@@ -3830,7 +4086,7 @@ VkResult DispatchCreateDisplayPlaneSurfaceKHR(
     safe_VkDisplaySurfaceCreateInfoKHR *local_pCreateInfo = NULL;
     {
         if (pCreateInfo) {
-            local_pCreateInfo = new safe_VkDisplaySurfaceCreateInfoKHR(pCreateInfo);
+            local_pCreateInfo = new (pool) safe_VkDisplaySurfaceCreateInfoKHR(pCreateInfo);
             if (pCreateInfo->displayMode) {
                 local_pCreateInfo->displayMode = layer_data->Unwrap(pCreateInfo->displayMode);
             }
@@ -3843,6 +4099,7 @@ VkResult DispatchCreateDisplayPlaneSurfaceKHR(
     if (VK_SUCCESS == result) {
         *pSurface = layer_data->WrapNew(*pSurface);
     }
+    pool.clear();
     return result;
 }
 
@@ -3862,6 +4119,7 @@ VkResult DispatchCreateXlibSurfaceKHR(
     if (VK_SUCCESS == result) {
         *pSurface = layer_data->WrapNew(*pSurface);
     }
+    pool.clear();
     return result;
 }
 #endif // VK_USE_PLATFORM_XLIB_KHR
@@ -3877,6 +4135,7 @@ VkBool32 DispatchGetPhysicalDeviceXlibPresentationSupportKHR(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(physicalDevice), layer_data_map);
     VkBool32 result = layer_data->instance_dispatch_table.GetPhysicalDeviceXlibPresentationSupportKHR(physicalDevice, queueFamilyIndex, dpy, visualID);
 
+    pool.clear();
     return result;
 }
 #endif // VK_USE_PLATFORM_XLIB_KHR
@@ -3895,6 +4154,7 @@ VkResult DispatchCreateXcbSurfaceKHR(
     if (VK_SUCCESS == result) {
         *pSurface = layer_data->WrapNew(*pSurface);
     }
+    pool.clear();
     return result;
 }
 #endif // VK_USE_PLATFORM_XCB_KHR
@@ -3910,6 +4170,7 @@ VkBool32 DispatchGetPhysicalDeviceXcbPresentationSupportKHR(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(physicalDevice), layer_data_map);
     VkBool32 result = layer_data->instance_dispatch_table.GetPhysicalDeviceXcbPresentationSupportKHR(physicalDevice, queueFamilyIndex, connection, visual_id);
 
+    pool.clear();
     return result;
 }
 #endif // VK_USE_PLATFORM_XCB_KHR
@@ -3928,6 +4189,7 @@ VkResult DispatchCreateWaylandSurfaceKHR(
     if (VK_SUCCESS == result) {
         *pSurface = layer_data->WrapNew(*pSurface);
     }
+    pool.clear();
     return result;
 }
 #endif // VK_USE_PLATFORM_WAYLAND_KHR
@@ -3942,6 +4204,7 @@ VkBool32 DispatchGetPhysicalDeviceWaylandPresentationSupportKHR(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(physicalDevice), layer_data_map);
     VkBool32 result = layer_data->instance_dispatch_table.GetPhysicalDeviceWaylandPresentationSupportKHR(physicalDevice, queueFamilyIndex, display);
 
+    pool.clear();
     return result;
 }
 #endif // VK_USE_PLATFORM_WAYLAND_KHR
@@ -3960,6 +4223,7 @@ VkResult DispatchCreateAndroidSurfaceKHR(
     if (VK_SUCCESS == result) {
         *pSurface = layer_data->WrapNew(*pSurface);
     }
+    pool.clear();
     return result;
 }
 #endif // VK_USE_PLATFORM_ANDROID_KHR
@@ -3978,6 +4242,7 @@ VkResult DispatchCreateWin32SurfaceKHR(
     if (VK_SUCCESS == result) {
         *pSurface = layer_data->WrapNew(*pSurface);
     }
+    pool.clear();
     return result;
 }
 #endif // VK_USE_PLATFORM_WIN32_KHR
@@ -3991,6 +4256,7 @@ VkBool32 DispatchGetPhysicalDeviceWin32PresentationSupportKHR(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(physicalDevice), layer_data_map);
     VkBool32 result = layer_data->instance_dispatch_table.GetPhysicalDeviceWin32PresentationSupportKHR(physicalDevice, queueFamilyIndex);
 
+    pool.clear();
     return result;
 }
 #endif // VK_USE_PLATFORM_WIN32_KHR
@@ -4002,6 +4268,7 @@ void DispatchGetPhysicalDeviceFeatures2KHR(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(physicalDevice), layer_data_map);
     layer_data->instance_dispatch_table.GetPhysicalDeviceFeatures2KHR(physicalDevice, pFeatures);
 
+    pool.clear();
 }
 
 void DispatchGetPhysicalDeviceProperties2KHR(
@@ -4011,6 +4278,7 @@ void DispatchGetPhysicalDeviceProperties2KHR(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(physicalDevice), layer_data_map);
     layer_data->instance_dispatch_table.GetPhysicalDeviceProperties2KHR(physicalDevice, pProperties);
 
+    pool.clear();
 }
 
 void DispatchGetPhysicalDeviceFormatProperties2KHR(
@@ -4021,6 +4289,7 @@ void DispatchGetPhysicalDeviceFormatProperties2KHR(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(physicalDevice), layer_data_map);
     layer_data->instance_dispatch_table.GetPhysicalDeviceFormatProperties2KHR(physicalDevice, format, pFormatProperties);
 
+    pool.clear();
 }
 
 VkResult DispatchGetPhysicalDeviceImageFormatProperties2KHR(
@@ -4033,7 +4302,7 @@ VkResult DispatchGetPhysicalDeviceImageFormatProperties2KHR(
     safe_VkPhysicalDeviceImageFormatInfo2 *local_pImageFormatInfo = NULL;
     {
         if (pImageFormatInfo) {
-            local_pImageFormatInfo = new safe_VkPhysicalDeviceImageFormatInfo2(pImageFormatInfo);
+            local_pImageFormatInfo = new (pool) safe_VkPhysicalDeviceImageFormatInfo2(pImageFormatInfo);
             WrapPnextChainHandles(layer_data, local_pImageFormatInfo->pNext);
         }
     }
@@ -4041,6 +4310,7 @@ VkResult DispatchGetPhysicalDeviceImageFormatProperties2KHR(
     if (local_pImageFormatInfo) {
         delete local_pImageFormatInfo;
     }
+    pool.clear();
     return result;
 }
 
@@ -4052,6 +4322,7 @@ void DispatchGetPhysicalDeviceQueueFamilyProperties2KHR(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(physicalDevice), layer_data_map);
     layer_data->instance_dispatch_table.GetPhysicalDeviceQueueFamilyProperties2KHR(physicalDevice, pQueueFamilyPropertyCount, pQueueFamilyProperties);
 
+    pool.clear();
 }
 
 void DispatchGetPhysicalDeviceMemoryProperties2KHR(
@@ -4061,6 +4332,7 @@ void DispatchGetPhysicalDeviceMemoryProperties2KHR(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(physicalDevice), layer_data_map);
     layer_data->instance_dispatch_table.GetPhysicalDeviceMemoryProperties2KHR(physicalDevice, pMemoryProperties);
 
+    pool.clear();
 }
 
 void DispatchGetPhysicalDeviceSparseImageFormatProperties2KHR(
@@ -4072,6 +4344,7 @@ void DispatchGetPhysicalDeviceSparseImageFormatProperties2KHR(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(physicalDevice), layer_data_map);
     layer_data->instance_dispatch_table.GetPhysicalDeviceSparseImageFormatProperties2KHR(physicalDevice, pFormatInfo, pPropertyCount, pProperties);
 
+    pool.clear();
 }
 
 void DispatchGetDeviceGroupPeerMemoryFeaturesKHR(
@@ -4084,6 +4357,7 @@ void DispatchGetDeviceGroupPeerMemoryFeaturesKHR(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(device), layer_data_map);
     layer_data->device_dispatch_table.GetDeviceGroupPeerMemoryFeaturesKHR(device, heapIndex, localDeviceIndex, remoteDeviceIndex, pPeerMemoryFeatures);
 
+    pool.clear();
 }
 
 void DispatchCmdSetDeviceMaskKHR(
@@ -4093,6 +4367,7 @@ void DispatchCmdSetDeviceMaskKHR(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     layer_data->device_dispatch_table.CmdSetDeviceMaskKHR(commandBuffer, deviceMask);
 
+    pool.clear();
 }
 
 void DispatchCmdDispatchBaseKHR(
@@ -4107,6 +4382,7 @@ void DispatchCmdDispatchBaseKHR(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     layer_data->device_dispatch_table.CmdDispatchBaseKHR(commandBuffer, baseGroupX, baseGroupY, baseGroupZ, groupCountX, groupCountY, groupCountZ);
 
+    pool.clear();
 }
 
 void DispatchTrimCommandPoolKHR(
@@ -4121,6 +4397,7 @@ void DispatchTrimCommandPoolKHR(
     }
     layer_data->device_dispatch_table.TrimCommandPoolKHR(device, commandPool, flags);
 
+    pool.clear();
 }
 
 VkResult DispatchEnumeratePhysicalDeviceGroupsKHR(
@@ -4131,6 +4408,7 @@ VkResult DispatchEnumeratePhysicalDeviceGroupsKHR(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(instance), layer_data_map);
     VkResult result = layer_data->instance_dispatch_table.EnumeratePhysicalDeviceGroupsKHR(instance, pPhysicalDeviceGroupCount, pPhysicalDeviceGroupProperties);
 
+    pool.clear();
     return result;
 }
 
@@ -4142,6 +4420,7 @@ void DispatchGetPhysicalDeviceExternalBufferPropertiesKHR(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(physicalDevice), layer_data_map);
     layer_data->instance_dispatch_table.GetPhysicalDeviceExternalBufferPropertiesKHR(physicalDevice, pExternalBufferInfo, pExternalBufferProperties);
 
+    pool.clear();
 }
 
 #ifdef VK_USE_PLATFORM_WIN32_KHR
@@ -4156,7 +4435,7 @@ VkResult DispatchGetMemoryWin32HandleKHR(
     safe_VkMemoryGetWin32HandleInfoKHR *local_pGetWin32HandleInfo = NULL;
     {
         if (pGetWin32HandleInfo) {
-            local_pGetWin32HandleInfo = new safe_VkMemoryGetWin32HandleInfoKHR(pGetWin32HandleInfo);
+            local_pGetWin32HandleInfo = new (pool) safe_VkMemoryGetWin32HandleInfoKHR(pGetWin32HandleInfo);
             if (pGetWin32HandleInfo->memory) {
                 local_pGetWin32HandleInfo->memory = layer_data->Unwrap(pGetWin32HandleInfo->memory);
             }
@@ -4166,6 +4445,7 @@ VkResult DispatchGetMemoryWin32HandleKHR(
     if (local_pGetWin32HandleInfo) {
         delete local_pGetWin32HandleInfo;
     }
+    pool.clear();
     return result;
 }
 #endif // VK_USE_PLATFORM_WIN32_KHR
@@ -4181,6 +4461,7 @@ VkResult DispatchGetMemoryWin32HandlePropertiesKHR(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(device), layer_data_map);
     VkResult result = layer_data->device_dispatch_table.GetMemoryWin32HandlePropertiesKHR(device, handleType, handle, pMemoryWin32HandleProperties);
 
+    pool.clear();
     return result;
 }
 #endif // VK_USE_PLATFORM_WIN32_KHR
@@ -4195,7 +4476,7 @@ VkResult DispatchGetMemoryFdKHR(
     safe_VkMemoryGetFdInfoKHR *local_pGetFdInfo = NULL;
     {
         if (pGetFdInfo) {
-            local_pGetFdInfo = new safe_VkMemoryGetFdInfoKHR(pGetFdInfo);
+            local_pGetFdInfo = new (pool) safe_VkMemoryGetFdInfoKHR(pGetFdInfo);
             if (pGetFdInfo->memory) {
                 local_pGetFdInfo->memory = layer_data->Unwrap(pGetFdInfo->memory);
             }
@@ -4205,6 +4486,7 @@ VkResult DispatchGetMemoryFdKHR(
     if (local_pGetFdInfo) {
         delete local_pGetFdInfo;
     }
+    pool.clear();
     return result;
 }
 
@@ -4217,6 +4499,7 @@ VkResult DispatchGetMemoryFdPropertiesKHR(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(device), layer_data_map);
     VkResult result = layer_data->device_dispatch_table.GetMemoryFdPropertiesKHR(device, handleType, fd, pMemoryFdProperties);
 
+    pool.clear();
     return result;
 }
 
@@ -4228,6 +4511,7 @@ void DispatchGetPhysicalDeviceExternalSemaphorePropertiesKHR(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(physicalDevice), layer_data_map);
     layer_data->instance_dispatch_table.GetPhysicalDeviceExternalSemaphorePropertiesKHR(physicalDevice, pExternalSemaphoreInfo, pExternalSemaphoreProperties);
 
+    pool.clear();
 }
 
 #ifdef VK_USE_PLATFORM_WIN32_KHR
@@ -4241,7 +4525,7 @@ VkResult DispatchImportSemaphoreWin32HandleKHR(
     safe_VkImportSemaphoreWin32HandleInfoKHR *local_pImportSemaphoreWin32HandleInfo = NULL;
     {
         if (pImportSemaphoreWin32HandleInfo) {
-            local_pImportSemaphoreWin32HandleInfo = new safe_VkImportSemaphoreWin32HandleInfoKHR(pImportSemaphoreWin32HandleInfo);
+            local_pImportSemaphoreWin32HandleInfo = new (pool) safe_VkImportSemaphoreWin32HandleInfoKHR(pImportSemaphoreWin32HandleInfo);
             if (pImportSemaphoreWin32HandleInfo->semaphore) {
                 local_pImportSemaphoreWin32HandleInfo->semaphore = layer_data->Unwrap(pImportSemaphoreWin32HandleInfo->semaphore);
             }
@@ -4251,6 +4535,7 @@ VkResult DispatchImportSemaphoreWin32HandleKHR(
     if (local_pImportSemaphoreWin32HandleInfo) {
         delete local_pImportSemaphoreWin32HandleInfo;
     }
+    pool.clear();
     return result;
 }
 #endif // VK_USE_PLATFORM_WIN32_KHR
@@ -4267,7 +4552,7 @@ VkResult DispatchGetSemaphoreWin32HandleKHR(
     safe_VkSemaphoreGetWin32HandleInfoKHR *local_pGetWin32HandleInfo = NULL;
     {
         if (pGetWin32HandleInfo) {
-            local_pGetWin32HandleInfo = new safe_VkSemaphoreGetWin32HandleInfoKHR(pGetWin32HandleInfo);
+            local_pGetWin32HandleInfo = new (pool) safe_VkSemaphoreGetWin32HandleInfoKHR(pGetWin32HandleInfo);
             if (pGetWin32HandleInfo->semaphore) {
                 local_pGetWin32HandleInfo->semaphore = layer_data->Unwrap(pGetWin32HandleInfo->semaphore);
             }
@@ -4277,6 +4562,7 @@ VkResult DispatchGetSemaphoreWin32HandleKHR(
     if (local_pGetWin32HandleInfo) {
         delete local_pGetWin32HandleInfo;
     }
+    pool.clear();
     return result;
 }
 #endif // VK_USE_PLATFORM_WIN32_KHR
@@ -4290,7 +4576,7 @@ VkResult DispatchImportSemaphoreFdKHR(
     safe_VkImportSemaphoreFdInfoKHR *local_pImportSemaphoreFdInfo = NULL;
     {
         if (pImportSemaphoreFdInfo) {
-            local_pImportSemaphoreFdInfo = new safe_VkImportSemaphoreFdInfoKHR(pImportSemaphoreFdInfo);
+            local_pImportSemaphoreFdInfo = new (pool) safe_VkImportSemaphoreFdInfoKHR(pImportSemaphoreFdInfo);
             if (pImportSemaphoreFdInfo->semaphore) {
                 local_pImportSemaphoreFdInfo->semaphore = layer_data->Unwrap(pImportSemaphoreFdInfo->semaphore);
             }
@@ -4300,6 +4586,7 @@ VkResult DispatchImportSemaphoreFdKHR(
     if (local_pImportSemaphoreFdInfo) {
         delete local_pImportSemaphoreFdInfo;
     }
+    pool.clear();
     return result;
 }
 
@@ -4313,7 +4600,7 @@ VkResult DispatchGetSemaphoreFdKHR(
     safe_VkSemaphoreGetFdInfoKHR *local_pGetFdInfo = NULL;
     {
         if (pGetFdInfo) {
-            local_pGetFdInfo = new safe_VkSemaphoreGetFdInfoKHR(pGetFdInfo);
+            local_pGetFdInfo = new (pool) safe_VkSemaphoreGetFdInfoKHR(pGetFdInfo);
             if (pGetFdInfo->semaphore) {
                 local_pGetFdInfo->semaphore = layer_data->Unwrap(pGetFdInfo->semaphore);
             }
@@ -4323,6 +4610,7 @@ VkResult DispatchGetSemaphoreFdKHR(
     if (local_pGetFdInfo) {
         delete local_pGetFdInfo;
     }
+    pool.clear();
     return result;
 }
 
@@ -4340,7 +4628,7 @@ void DispatchCmdPushDescriptorSetKHR(
     {
         layout = layer_data->Unwrap(layout);
         if (pDescriptorWrites) {
-            local_pDescriptorWrites = new safe_VkWriteDescriptorSet[descriptorWriteCount];
+            local_pDescriptorWrites = new (pool) safe_VkWriteDescriptorSet[descriptorWriteCount];
             for (uint32_t index0 = 0; index0 < descriptorWriteCount; ++index0) {
                 local_pDescriptorWrites[index0].initialize(&pDescriptorWrites[index0]);
                 WrapPnextChainHandles(layer_data, local_pDescriptorWrites[index0].pNext);
@@ -4376,6 +4664,7 @@ void DispatchCmdPushDescriptorSetKHR(
     if (local_pDescriptorWrites) {
         delete[] local_pDescriptorWrites;
     }
+    pool.clear();
 }
 
 // Skip vkCmdPushDescriptorSetWithTemplateKHR dispatch, manually generated
@@ -4398,7 +4687,7 @@ void DispatchCmdBeginRenderPass2KHR(
     safe_VkRenderPassBeginInfo *local_pRenderPassBegin = NULL;
     {
         if (pRenderPassBegin) {
-            local_pRenderPassBegin = new safe_VkRenderPassBeginInfo(pRenderPassBegin);
+            local_pRenderPassBegin = new (pool) safe_VkRenderPassBeginInfo(pRenderPassBegin);
             if (pRenderPassBegin->renderPass) {
                 local_pRenderPassBegin->renderPass = layer_data->Unwrap(pRenderPassBegin->renderPass);
             }
@@ -4412,6 +4701,7 @@ void DispatchCmdBeginRenderPass2KHR(
     if (local_pRenderPassBegin) {
         delete local_pRenderPassBegin;
     }
+    pool.clear();
 }
 
 void DispatchCmdNextSubpass2KHR(
@@ -4422,6 +4712,7 @@ void DispatchCmdNextSubpass2KHR(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     layer_data->device_dispatch_table.CmdNextSubpass2KHR(commandBuffer, pSubpassBeginInfo, pSubpassEndInfo);
 
+    pool.clear();
 }
 
 void DispatchCmdEndRenderPass2KHR(
@@ -4431,6 +4722,7 @@ void DispatchCmdEndRenderPass2KHR(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     layer_data->device_dispatch_table.CmdEndRenderPass2KHR(commandBuffer, pSubpassEndInfo);
 
+    pool.clear();
 }
 
 VkResult DispatchGetSwapchainStatusKHR(
@@ -4444,6 +4736,7 @@ VkResult DispatchGetSwapchainStatusKHR(
     }
     VkResult result = layer_data->device_dispatch_table.GetSwapchainStatusKHR(device, swapchain);
 
+    pool.clear();
     return result;
 }
 
@@ -4455,6 +4748,7 @@ void DispatchGetPhysicalDeviceExternalFencePropertiesKHR(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(physicalDevice), layer_data_map);
     layer_data->instance_dispatch_table.GetPhysicalDeviceExternalFencePropertiesKHR(physicalDevice, pExternalFenceInfo, pExternalFenceProperties);
 
+    pool.clear();
 }
 
 #ifdef VK_USE_PLATFORM_WIN32_KHR
@@ -4468,7 +4762,7 @@ VkResult DispatchImportFenceWin32HandleKHR(
     safe_VkImportFenceWin32HandleInfoKHR *local_pImportFenceWin32HandleInfo = NULL;
     {
         if (pImportFenceWin32HandleInfo) {
-            local_pImportFenceWin32HandleInfo = new safe_VkImportFenceWin32HandleInfoKHR(pImportFenceWin32HandleInfo);
+            local_pImportFenceWin32HandleInfo = new (pool) safe_VkImportFenceWin32HandleInfoKHR(pImportFenceWin32HandleInfo);
             if (pImportFenceWin32HandleInfo->fence) {
                 local_pImportFenceWin32HandleInfo->fence = layer_data->Unwrap(pImportFenceWin32HandleInfo->fence);
             }
@@ -4478,6 +4772,7 @@ VkResult DispatchImportFenceWin32HandleKHR(
     if (local_pImportFenceWin32HandleInfo) {
         delete local_pImportFenceWin32HandleInfo;
     }
+    pool.clear();
     return result;
 }
 #endif // VK_USE_PLATFORM_WIN32_KHR
@@ -4494,7 +4789,7 @@ VkResult DispatchGetFenceWin32HandleKHR(
     safe_VkFenceGetWin32HandleInfoKHR *local_pGetWin32HandleInfo = NULL;
     {
         if (pGetWin32HandleInfo) {
-            local_pGetWin32HandleInfo = new safe_VkFenceGetWin32HandleInfoKHR(pGetWin32HandleInfo);
+            local_pGetWin32HandleInfo = new (pool) safe_VkFenceGetWin32HandleInfoKHR(pGetWin32HandleInfo);
             if (pGetWin32HandleInfo->fence) {
                 local_pGetWin32HandleInfo->fence = layer_data->Unwrap(pGetWin32HandleInfo->fence);
             }
@@ -4504,6 +4799,7 @@ VkResult DispatchGetFenceWin32HandleKHR(
     if (local_pGetWin32HandleInfo) {
         delete local_pGetWin32HandleInfo;
     }
+    pool.clear();
     return result;
 }
 #endif // VK_USE_PLATFORM_WIN32_KHR
@@ -4517,7 +4813,7 @@ VkResult DispatchImportFenceFdKHR(
     safe_VkImportFenceFdInfoKHR *local_pImportFenceFdInfo = NULL;
     {
         if (pImportFenceFdInfo) {
-            local_pImportFenceFdInfo = new safe_VkImportFenceFdInfoKHR(pImportFenceFdInfo);
+            local_pImportFenceFdInfo = new (pool) safe_VkImportFenceFdInfoKHR(pImportFenceFdInfo);
             if (pImportFenceFdInfo->fence) {
                 local_pImportFenceFdInfo->fence = layer_data->Unwrap(pImportFenceFdInfo->fence);
             }
@@ -4527,6 +4823,7 @@ VkResult DispatchImportFenceFdKHR(
     if (local_pImportFenceFdInfo) {
         delete local_pImportFenceFdInfo;
     }
+    pool.clear();
     return result;
 }
 
@@ -4540,7 +4837,7 @@ VkResult DispatchGetFenceFdKHR(
     safe_VkFenceGetFdInfoKHR *local_pGetFdInfo = NULL;
     {
         if (pGetFdInfo) {
-            local_pGetFdInfo = new safe_VkFenceGetFdInfoKHR(pGetFdInfo);
+            local_pGetFdInfo = new (pool) safe_VkFenceGetFdInfoKHR(pGetFdInfo);
             if (pGetFdInfo->fence) {
                 local_pGetFdInfo->fence = layer_data->Unwrap(pGetFdInfo->fence);
             }
@@ -4550,6 +4847,7 @@ VkResult DispatchGetFenceFdKHR(
     if (local_pGetFdInfo) {
         delete local_pGetFdInfo;
     }
+    pool.clear();
     return result;
 }
 
@@ -4563,7 +4861,7 @@ VkResult DispatchGetPhysicalDeviceSurfaceCapabilities2KHR(
     safe_VkPhysicalDeviceSurfaceInfo2KHR *local_pSurfaceInfo = NULL;
     {
         if (pSurfaceInfo) {
-            local_pSurfaceInfo = new safe_VkPhysicalDeviceSurfaceInfo2KHR(pSurfaceInfo);
+            local_pSurfaceInfo = new (pool) safe_VkPhysicalDeviceSurfaceInfo2KHR(pSurfaceInfo);
             if (pSurfaceInfo->surface) {
                 local_pSurfaceInfo->surface = layer_data->Unwrap(pSurfaceInfo->surface);
             }
@@ -4573,6 +4871,7 @@ VkResult DispatchGetPhysicalDeviceSurfaceCapabilities2KHR(
     if (local_pSurfaceInfo) {
         delete local_pSurfaceInfo;
     }
+    pool.clear();
     return result;
 }
 
@@ -4587,7 +4886,7 @@ VkResult DispatchGetPhysicalDeviceSurfaceFormats2KHR(
     safe_VkPhysicalDeviceSurfaceInfo2KHR *local_pSurfaceInfo = NULL;
     {
         if (pSurfaceInfo) {
-            local_pSurfaceInfo = new safe_VkPhysicalDeviceSurfaceInfo2KHR(pSurfaceInfo);
+            local_pSurfaceInfo = new (pool) safe_VkPhysicalDeviceSurfaceInfo2KHR(pSurfaceInfo);
             if (pSurfaceInfo->surface) {
                 local_pSurfaceInfo->surface = layer_data->Unwrap(pSurfaceInfo->surface);
             }
@@ -4597,6 +4896,7 @@ VkResult DispatchGetPhysicalDeviceSurfaceFormats2KHR(
     if (local_pSurfaceInfo) {
         delete local_pSurfaceInfo;
     }
+    pool.clear();
     return result;
 }
 
@@ -4616,7 +4916,7 @@ VkResult DispatchGetDisplayPlaneCapabilities2KHR(
     safe_VkDisplayPlaneInfo2KHR *local_pDisplayPlaneInfo = NULL;
     {
         if (pDisplayPlaneInfo) {
-            local_pDisplayPlaneInfo = new safe_VkDisplayPlaneInfo2KHR(pDisplayPlaneInfo);
+            local_pDisplayPlaneInfo = new (pool) safe_VkDisplayPlaneInfo2KHR(pDisplayPlaneInfo);
             if (pDisplayPlaneInfo->mode) {
                 local_pDisplayPlaneInfo->mode = layer_data->Unwrap(pDisplayPlaneInfo->mode);
             }
@@ -4626,6 +4926,7 @@ VkResult DispatchGetDisplayPlaneCapabilities2KHR(
     if (local_pDisplayPlaneInfo) {
         delete local_pDisplayPlaneInfo;
     }
+    pool.clear();
     return result;
 }
 
@@ -4639,7 +4940,7 @@ void DispatchGetImageMemoryRequirements2KHR(
     safe_VkImageMemoryRequirementsInfo2 *local_pInfo = NULL;
     {
         if (pInfo) {
-            local_pInfo = new safe_VkImageMemoryRequirementsInfo2(pInfo);
+            local_pInfo = new (pool) safe_VkImageMemoryRequirementsInfo2(pInfo);
             if (pInfo->image) {
                 local_pInfo->image = layer_data->Unwrap(pInfo->image);
             }
@@ -4649,6 +4950,7 @@ void DispatchGetImageMemoryRequirements2KHR(
     if (local_pInfo) {
         delete local_pInfo;
     }
+    pool.clear();
 }
 
 void DispatchGetBufferMemoryRequirements2KHR(
@@ -4661,7 +4963,7 @@ void DispatchGetBufferMemoryRequirements2KHR(
     safe_VkBufferMemoryRequirementsInfo2 *local_pInfo = NULL;
     {
         if (pInfo) {
-            local_pInfo = new safe_VkBufferMemoryRequirementsInfo2(pInfo);
+            local_pInfo = new (pool) safe_VkBufferMemoryRequirementsInfo2(pInfo);
             if (pInfo->buffer) {
                 local_pInfo->buffer = layer_data->Unwrap(pInfo->buffer);
             }
@@ -4671,6 +4973,7 @@ void DispatchGetBufferMemoryRequirements2KHR(
     if (local_pInfo) {
         delete local_pInfo;
     }
+    pool.clear();
 }
 
 void DispatchGetImageSparseMemoryRequirements2KHR(
@@ -4684,7 +4987,7 @@ void DispatchGetImageSparseMemoryRequirements2KHR(
     safe_VkImageSparseMemoryRequirementsInfo2 *local_pInfo = NULL;
     {
         if (pInfo) {
-            local_pInfo = new safe_VkImageSparseMemoryRequirementsInfo2(pInfo);
+            local_pInfo = new (pool) safe_VkImageSparseMemoryRequirementsInfo2(pInfo);
             if (pInfo->image) {
                 local_pInfo->image = layer_data->Unwrap(pInfo->image);
             }
@@ -4694,6 +4997,7 @@ void DispatchGetImageSparseMemoryRequirements2KHR(
     if (local_pInfo) {
         delete local_pInfo;
     }
+    pool.clear();
 }
 
 VkResult DispatchCreateSamplerYcbcrConversionKHR(
@@ -4707,7 +5011,7 @@ VkResult DispatchCreateSamplerYcbcrConversionKHR(
     safe_VkSamplerYcbcrConversionCreateInfo *local_pCreateInfo = NULL;
     {
         if (pCreateInfo) {
-            local_pCreateInfo = new safe_VkSamplerYcbcrConversionCreateInfo(pCreateInfo);
+            local_pCreateInfo = new (pool) safe_VkSamplerYcbcrConversionCreateInfo(pCreateInfo);
             WrapPnextChainHandles(layer_data, local_pCreateInfo->pNext);
         }
     }
@@ -4718,6 +5022,7 @@ VkResult DispatchCreateSamplerYcbcrConversionKHR(
     if (VK_SUCCESS == result) {
         *pYcbcrConversion = layer_data->WrapNew(*pYcbcrConversion);
     }
+    pool.clear();
     return result;
 }
 
@@ -4737,6 +5042,7 @@ void DispatchDestroySamplerYcbcrConversionKHR(
     }
     layer_data->device_dispatch_table.DestroySamplerYcbcrConversionKHR(device, ycbcrConversion, pAllocator);
 
+    pool.clear();
 }
 
 VkResult DispatchBindBufferMemory2KHR(
@@ -4749,7 +5055,7 @@ VkResult DispatchBindBufferMemory2KHR(
     safe_VkBindBufferMemoryInfo *local_pBindInfos = NULL;
     {
         if (pBindInfos) {
-            local_pBindInfos = new safe_VkBindBufferMemoryInfo[bindInfoCount];
+            local_pBindInfos = new (pool) safe_VkBindBufferMemoryInfo[bindInfoCount];
             for (uint32_t index0 = 0; index0 < bindInfoCount; ++index0) {
                 local_pBindInfos[index0].initialize(&pBindInfos[index0]);
                 if (pBindInfos[index0].buffer) {
@@ -4765,6 +5071,7 @@ VkResult DispatchBindBufferMemory2KHR(
     if (local_pBindInfos) {
         delete[] local_pBindInfos;
     }
+    pool.clear();
     return result;
 }
 
@@ -4778,7 +5085,7 @@ VkResult DispatchBindImageMemory2KHR(
     safe_VkBindImageMemoryInfo *local_pBindInfos = NULL;
     {
         if (pBindInfos) {
-            local_pBindInfos = new safe_VkBindImageMemoryInfo[bindInfoCount];
+            local_pBindInfos = new (pool) safe_VkBindImageMemoryInfo[bindInfoCount];
             for (uint32_t index0 = 0; index0 < bindInfoCount; ++index0) {
                 local_pBindInfos[index0].initialize(&pBindInfos[index0]);
                 WrapPnextChainHandles(layer_data, local_pBindInfos[index0].pNext);
@@ -4795,6 +5102,7 @@ VkResult DispatchBindImageMemory2KHR(
     if (local_pBindInfos) {
         delete[] local_pBindInfos;
     }
+    pool.clear();
     return result;
 }
 
@@ -4808,7 +5116,7 @@ void DispatchGetDescriptorSetLayoutSupportKHR(
     safe_VkDescriptorSetLayoutCreateInfo *local_pCreateInfo = NULL;
     {
         if (pCreateInfo) {
-            local_pCreateInfo = new safe_VkDescriptorSetLayoutCreateInfo(pCreateInfo);
+            local_pCreateInfo = new (pool) safe_VkDescriptorSetLayoutCreateInfo(pCreateInfo);
             if (local_pCreateInfo->pBindings) {
                 for (uint32_t index1 = 0; index1 < local_pCreateInfo->bindingCount; ++index1) {
                     if (local_pCreateInfo->pBindings[index1].pImmutableSamplers) {
@@ -4824,6 +5132,7 @@ void DispatchGetDescriptorSetLayoutSupportKHR(
     if (local_pCreateInfo) {
         delete local_pCreateInfo;
     }
+    pool.clear();
 }
 
 void DispatchCmdDrawIndirectCountKHR(
@@ -4843,6 +5152,7 @@ void DispatchCmdDrawIndirectCountKHR(
     }
     layer_data->device_dispatch_table.CmdDrawIndirectCountKHR(commandBuffer, buffer, offset, countBuffer, countBufferOffset, maxDrawCount, stride);
 
+    pool.clear();
 }
 
 void DispatchCmdDrawIndexedIndirectCountKHR(
@@ -4862,6 +5172,7 @@ void DispatchCmdDrawIndexedIndirectCountKHR(
     }
     layer_data->device_dispatch_table.CmdDrawIndexedIndirectCountKHR(commandBuffer, buffer, offset, countBuffer, countBufferOffset, maxDrawCount, stride);
 
+    pool.clear();
 }
 
 VkResult DispatchGetPipelineExecutablePropertiesKHR(
@@ -4875,7 +5186,7 @@ VkResult DispatchGetPipelineExecutablePropertiesKHR(
     safe_VkPipelineInfoKHR *local_pPipelineInfo = NULL;
     {
         if (pPipelineInfo) {
-            local_pPipelineInfo = new safe_VkPipelineInfoKHR(pPipelineInfo);
+            local_pPipelineInfo = new (pool) safe_VkPipelineInfoKHR(pPipelineInfo);
             if (pPipelineInfo->pipeline) {
                 local_pPipelineInfo->pipeline = layer_data->Unwrap(pPipelineInfo->pipeline);
             }
@@ -4885,6 +5196,7 @@ VkResult DispatchGetPipelineExecutablePropertiesKHR(
     if (local_pPipelineInfo) {
         delete local_pPipelineInfo;
     }
+    pool.clear();
     return result;
 }
 
@@ -4899,7 +5211,7 @@ VkResult DispatchGetPipelineExecutableStatisticsKHR(
     safe_VkPipelineExecutableInfoKHR *local_pExecutableInfo = NULL;
     {
         if (pExecutableInfo) {
-            local_pExecutableInfo = new safe_VkPipelineExecutableInfoKHR(pExecutableInfo);
+            local_pExecutableInfo = new (pool) safe_VkPipelineExecutableInfoKHR(pExecutableInfo);
             if (pExecutableInfo->pipeline) {
                 local_pExecutableInfo->pipeline = layer_data->Unwrap(pExecutableInfo->pipeline);
             }
@@ -4909,6 +5221,7 @@ VkResult DispatchGetPipelineExecutableStatisticsKHR(
     if (local_pExecutableInfo) {
         delete local_pExecutableInfo;
     }
+    pool.clear();
     return result;
 }
 
@@ -4923,7 +5236,7 @@ VkResult DispatchGetPipelineExecutableInternalRepresentationsKHR(
     safe_VkPipelineExecutableInfoKHR *local_pExecutableInfo = NULL;
     {
         if (pExecutableInfo) {
-            local_pExecutableInfo = new safe_VkPipelineExecutableInfoKHR(pExecutableInfo);
+            local_pExecutableInfo = new (pool) safe_VkPipelineExecutableInfoKHR(pExecutableInfo);
             if (pExecutableInfo->pipeline) {
                 local_pExecutableInfo->pipeline = layer_data->Unwrap(pExecutableInfo->pipeline);
             }
@@ -4933,6 +5246,7 @@ VkResult DispatchGetPipelineExecutableInternalRepresentationsKHR(
     if (local_pExecutableInfo) {
         delete local_pExecutableInfo;
     }
+    pool.clear();
     return result;
 }
 
@@ -4948,6 +5262,7 @@ VkResult DispatchCreateDebugReportCallbackEXT(
     if (VK_SUCCESS == result) {
         *pCallback = layer_data->WrapNew(*pCallback);
     }
+    pool.clear();
     return result;
 }
 
@@ -4967,6 +5282,7 @@ void DispatchDestroyDebugReportCallbackEXT(
     }
     layer_data->instance_dispatch_table.DestroyDebugReportCallbackEXT(instance, callback, pAllocator);
 
+    pool.clear();
 }
 
 void DispatchDebugReportMessageEXT(
@@ -4982,6 +5298,7 @@ void DispatchDebugReportMessageEXT(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(instance), layer_data_map);
     layer_data->instance_dispatch_table.DebugReportMessageEXT(instance, flags, objectType, object, location, messageCode, pLayerPrefix, pMessage);
 
+    pool.clear();
 }
 
 // Skip vkDebugMarkerSetObjectTagEXT dispatch, manually generated
@@ -4995,6 +5312,7 @@ void DispatchCmdDebugMarkerBeginEXT(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     layer_data->device_dispatch_table.CmdDebugMarkerBeginEXT(commandBuffer, pMarkerInfo);
 
+    pool.clear();
 }
 
 void DispatchCmdDebugMarkerEndEXT(
@@ -5003,6 +5321,7 @@ void DispatchCmdDebugMarkerEndEXT(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     layer_data->device_dispatch_table.CmdDebugMarkerEndEXT(commandBuffer);
 
+    pool.clear();
 }
 
 void DispatchCmdDebugMarkerInsertEXT(
@@ -5012,6 +5331,7 @@ void DispatchCmdDebugMarkerInsertEXT(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     layer_data->device_dispatch_table.CmdDebugMarkerInsertEXT(commandBuffer, pMarkerInfo);
 
+    pool.clear();
 }
 
 void DispatchCmdBindTransformFeedbackBuffersEXT(
@@ -5027,7 +5347,7 @@ void DispatchCmdBindTransformFeedbackBuffersEXT(
     VkBuffer *local_pBuffers = NULL;
     {
         if (pBuffers) {
-            local_pBuffers = new VkBuffer[bindingCount];
+            local_pBuffers = new (pool) VkBuffer[bindingCount];
             for (uint32_t index0 = 0; index0 < bindingCount; ++index0) {
                 local_pBuffers[index0] = layer_data->Unwrap(pBuffers[index0]);
             }
@@ -5036,6 +5356,7 @@ void DispatchCmdBindTransformFeedbackBuffersEXT(
     layer_data->device_dispatch_table.CmdBindTransformFeedbackBuffersEXT(commandBuffer, firstBinding, bindingCount, (const VkBuffer*)local_pBuffers, pOffsets, pSizes);
     if (local_pBuffers)
         delete[] local_pBuffers;
+    pool.clear();
 }
 
 void DispatchCmdBeginTransformFeedbackEXT(
@@ -5050,7 +5371,7 @@ void DispatchCmdBeginTransformFeedbackEXT(
     VkBuffer *local_pCounterBuffers = NULL;
     {
         if (pCounterBuffers) {
-            local_pCounterBuffers = new VkBuffer[counterBufferCount];
+            local_pCounterBuffers = new (pool) VkBuffer[counterBufferCount];
             for (uint32_t index0 = 0; index0 < counterBufferCount; ++index0) {
                 local_pCounterBuffers[index0] = layer_data->Unwrap(pCounterBuffers[index0]);
             }
@@ -5059,6 +5380,7 @@ void DispatchCmdBeginTransformFeedbackEXT(
     layer_data->device_dispatch_table.CmdBeginTransformFeedbackEXT(commandBuffer, firstCounterBuffer, counterBufferCount, (const VkBuffer*)local_pCounterBuffers, pCounterBufferOffsets);
     if (local_pCounterBuffers)
         delete[] local_pCounterBuffers;
+    pool.clear();
 }
 
 void DispatchCmdEndTransformFeedbackEXT(
@@ -5073,7 +5395,7 @@ void DispatchCmdEndTransformFeedbackEXT(
     VkBuffer *local_pCounterBuffers = NULL;
     {
         if (pCounterBuffers) {
-            local_pCounterBuffers = new VkBuffer[counterBufferCount];
+            local_pCounterBuffers = new (pool) VkBuffer[counterBufferCount];
             for (uint32_t index0 = 0; index0 < counterBufferCount; ++index0) {
                 local_pCounterBuffers[index0] = layer_data->Unwrap(pCounterBuffers[index0]);
             }
@@ -5082,6 +5404,7 @@ void DispatchCmdEndTransformFeedbackEXT(
     layer_data->device_dispatch_table.CmdEndTransformFeedbackEXT(commandBuffer, firstCounterBuffer, counterBufferCount, (const VkBuffer*)local_pCounterBuffers, pCounterBufferOffsets);
     if (local_pCounterBuffers)
         delete[] local_pCounterBuffers;
+    pool.clear();
 }
 
 void DispatchCmdBeginQueryIndexedEXT(
@@ -5098,6 +5421,7 @@ void DispatchCmdBeginQueryIndexedEXT(
     }
     layer_data->device_dispatch_table.CmdBeginQueryIndexedEXT(commandBuffer, queryPool, query, flags, index);
 
+    pool.clear();
 }
 
 void DispatchCmdEndQueryIndexedEXT(
@@ -5113,6 +5437,7 @@ void DispatchCmdEndQueryIndexedEXT(
     }
     layer_data->device_dispatch_table.CmdEndQueryIndexedEXT(commandBuffer, queryPool, query, index);
 
+    pool.clear();
 }
 
 void DispatchCmdDrawIndirectByteCountEXT(
@@ -5131,6 +5456,7 @@ void DispatchCmdDrawIndirectByteCountEXT(
     }
     layer_data->device_dispatch_table.CmdDrawIndirectByteCountEXT(commandBuffer, instanceCount, firstInstance, counterBuffer, counterBufferOffset, counterOffset, vertexStride);
 
+    pool.clear();
 }
 
 uint32_t DispatchGetImageViewHandleNVX(
@@ -5142,7 +5468,7 @@ uint32_t DispatchGetImageViewHandleNVX(
     safe_VkImageViewHandleInfoNVX *local_pInfo = NULL;
     {
         if (pInfo) {
-            local_pInfo = new safe_VkImageViewHandleInfoNVX(pInfo);
+            local_pInfo = new (pool) safe_VkImageViewHandleInfoNVX(pInfo);
             if (pInfo->imageView) {
                 local_pInfo->imageView = layer_data->Unwrap(pInfo->imageView);
             }
@@ -5155,6 +5481,7 @@ uint32_t DispatchGetImageViewHandleNVX(
     if (local_pInfo) {
         delete local_pInfo;
     }
+    pool.clear();
     return result;
 }
 
@@ -5175,6 +5502,7 @@ void DispatchCmdDrawIndirectCountAMD(
     }
     layer_data->device_dispatch_table.CmdDrawIndirectCountAMD(commandBuffer, buffer, offset, countBuffer, countBufferOffset, maxDrawCount, stride);
 
+    pool.clear();
 }
 
 void DispatchCmdDrawIndexedIndirectCountAMD(
@@ -5194,6 +5522,7 @@ void DispatchCmdDrawIndexedIndirectCountAMD(
     }
     layer_data->device_dispatch_table.CmdDrawIndexedIndirectCountAMD(commandBuffer, buffer, offset, countBuffer, countBufferOffset, maxDrawCount, stride);
 
+    pool.clear();
 }
 
 VkResult DispatchGetShaderInfoAMD(
@@ -5211,6 +5540,7 @@ VkResult DispatchGetShaderInfoAMD(
     }
     VkResult result = layer_data->device_dispatch_table.GetShaderInfoAMD(device, pipeline, shaderStage, infoType, pInfoSize, pInfo);
 
+    pool.clear();
     return result;
 }
 
@@ -5228,6 +5558,7 @@ VkResult DispatchCreateStreamDescriptorSurfaceGGP(
     if (VK_SUCCESS == result) {
         *pSurface = layer_data->WrapNew(*pSurface);
     }
+    pool.clear();
     return result;
 }
 #endif // VK_USE_PLATFORM_GGP
@@ -5245,6 +5576,7 @@ VkResult DispatchGetPhysicalDeviceExternalImageFormatPropertiesNV(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(physicalDevice), layer_data_map);
     VkResult result = layer_data->instance_dispatch_table.GetPhysicalDeviceExternalImageFormatPropertiesNV(physicalDevice, format, type, tiling, usage, flags, externalHandleType, pExternalImageFormatProperties);
 
+    pool.clear();
     return result;
 }
 
@@ -5263,6 +5595,7 @@ VkResult DispatchGetMemoryWin32HandleNV(
     }
     VkResult result = layer_data->device_dispatch_table.GetMemoryWin32HandleNV(device, memory, handleType, pHandle);
 
+    pool.clear();
     return result;
 }
 #endif // VK_USE_PLATFORM_WIN32_KHR
@@ -5281,6 +5614,7 @@ VkResult DispatchCreateViSurfaceNN(
     if (VK_SUCCESS == result) {
         *pSurface = layer_data->WrapNew(*pSurface);
     }
+    pool.clear();
     return result;
 }
 #endif // VK_USE_PLATFORM_VI_NN
@@ -5294,7 +5628,7 @@ void DispatchCmdBeginConditionalRenderingEXT(
     safe_VkConditionalRenderingBeginInfoEXT *local_pConditionalRenderingBegin = NULL;
     {
         if (pConditionalRenderingBegin) {
-            local_pConditionalRenderingBegin = new safe_VkConditionalRenderingBeginInfoEXT(pConditionalRenderingBegin);
+            local_pConditionalRenderingBegin = new (pool) safe_VkConditionalRenderingBeginInfoEXT(pConditionalRenderingBegin);
             if (pConditionalRenderingBegin->buffer) {
                 local_pConditionalRenderingBegin->buffer = layer_data->Unwrap(pConditionalRenderingBegin->buffer);
             }
@@ -5304,6 +5638,7 @@ void DispatchCmdBeginConditionalRenderingEXT(
     if (local_pConditionalRenderingBegin) {
         delete local_pConditionalRenderingBegin;
     }
+    pool.clear();
 }
 
 void DispatchCmdEndConditionalRenderingEXT(
@@ -5312,6 +5647,7 @@ void DispatchCmdEndConditionalRenderingEXT(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     layer_data->device_dispatch_table.CmdEndConditionalRenderingEXT(commandBuffer);
 
+    pool.clear();
 }
 
 void DispatchCmdProcessCommandsNVX(
@@ -5323,7 +5659,7 @@ void DispatchCmdProcessCommandsNVX(
     safe_VkCmdProcessCommandsInfoNVX *local_pProcessCommandsInfo = NULL;
     {
         if (pProcessCommandsInfo) {
-            local_pProcessCommandsInfo = new safe_VkCmdProcessCommandsInfoNVX(pProcessCommandsInfo);
+            local_pProcessCommandsInfo = new (pool) safe_VkCmdProcessCommandsInfoNVX(pProcessCommandsInfo);
             if (pProcessCommandsInfo->objectTable) {
                 local_pProcessCommandsInfo->objectTable = layer_data->Unwrap(pProcessCommandsInfo->objectTable);
             }
@@ -5349,6 +5685,7 @@ void DispatchCmdProcessCommandsNVX(
     if (local_pProcessCommandsInfo) {
         delete local_pProcessCommandsInfo;
     }
+    pool.clear();
 }
 
 void DispatchCmdReserveSpaceForCommandsNVX(
@@ -5360,7 +5697,7 @@ void DispatchCmdReserveSpaceForCommandsNVX(
     safe_VkCmdReserveSpaceForCommandsInfoNVX *local_pReserveSpaceInfo = NULL;
     {
         if (pReserveSpaceInfo) {
-            local_pReserveSpaceInfo = new safe_VkCmdReserveSpaceForCommandsInfoNVX(pReserveSpaceInfo);
+            local_pReserveSpaceInfo = new (pool) safe_VkCmdReserveSpaceForCommandsInfoNVX(pReserveSpaceInfo);
             if (pReserveSpaceInfo->objectTable) {
                 local_pReserveSpaceInfo->objectTable = layer_data->Unwrap(pReserveSpaceInfo->objectTable);
             }
@@ -5373,6 +5710,7 @@ void DispatchCmdReserveSpaceForCommandsNVX(
     if (local_pReserveSpaceInfo) {
         delete local_pReserveSpaceInfo;
     }
+    pool.clear();
 }
 
 VkResult DispatchCreateIndirectCommandsLayoutNVX(
@@ -5387,6 +5725,7 @@ VkResult DispatchCreateIndirectCommandsLayoutNVX(
     if (VK_SUCCESS == result) {
         *pIndirectCommandsLayout = layer_data->WrapNew(*pIndirectCommandsLayout);
     }
+    pool.clear();
     return result;
 }
 
@@ -5406,6 +5745,7 @@ void DispatchDestroyIndirectCommandsLayoutNVX(
     }
     layer_data->device_dispatch_table.DestroyIndirectCommandsLayoutNVX(device, indirectCommandsLayout, pAllocator);
 
+    pool.clear();
 }
 
 VkResult DispatchCreateObjectTableNVX(
@@ -5420,6 +5760,7 @@ VkResult DispatchCreateObjectTableNVX(
     if (VK_SUCCESS == result) {
         *pObjectTable = layer_data->WrapNew(*pObjectTable);
     }
+    pool.clear();
     return result;
 }
 
@@ -5439,6 +5780,7 @@ void DispatchDestroyObjectTableNVX(
     }
     layer_data->device_dispatch_table.DestroyObjectTableNVX(device, objectTable, pAllocator);
 
+    pool.clear();
 }
 
 VkResult DispatchRegisterObjectsNVX(
@@ -5455,6 +5797,7 @@ VkResult DispatchRegisterObjectsNVX(
     }
     VkResult result = layer_data->device_dispatch_table.RegisterObjectsNVX(device, objectTable, objectCount, ppObjectTableEntries, pObjectIndices);
 
+    pool.clear();
     return result;
 }
 
@@ -5472,6 +5815,7 @@ VkResult DispatchUnregisterObjectsNVX(
     }
     VkResult result = layer_data->device_dispatch_table.UnregisterObjectsNVX(device, objectTable, objectCount, pObjectEntryTypes, pObjectIndices);
 
+    pool.clear();
     return result;
 }
 
@@ -5483,6 +5827,7 @@ void DispatchGetPhysicalDeviceGeneratedCommandsPropertiesNVX(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(physicalDevice), layer_data_map);
     layer_data->instance_dispatch_table.GetPhysicalDeviceGeneratedCommandsPropertiesNVX(physicalDevice, pFeatures, pLimits);
 
+    pool.clear();
 }
 
 void DispatchCmdSetViewportWScalingNV(
@@ -5494,6 +5839,7 @@ void DispatchCmdSetViewportWScalingNV(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     layer_data->device_dispatch_table.CmdSetViewportWScalingNV(commandBuffer, firstViewport, viewportCount, pViewportWScalings);
 
+    pool.clear();
 }
 
 VkResult DispatchReleaseDisplayEXT(
@@ -5507,6 +5853,7 @@ VkResult DispatchReleaseDisplayEXT(
     }
     VkResult result = layer_data->instance_dispatch_table.ReleaseDisplayEXT(physicalDevice, display);
 
+    pool.clear();
     return result;
 }
 
@@ -5524,6 +5871,7 @@ VkResult DispatchAcquireXlibDisplayEXT(
     }
     VkResult result = layer_data->instance_dispatch_table.AcquireXlibDisplayEXT(physicalDevice, dpy, display);
 
+    pool.clear();
     return result;
 }
 #endif // VK_USE_PLATFORM_XLIB_XRANDR_EXT
@@ -5542,6 +5890,7 @@ VkResult DispatchGetRandROutputDisplayEXT(
     if (VK_SUCCESS == result) {
         *pDisplay = layer_data->WrapNew(*pDisplay);
     }
+    pool.clear();
     return result;
 }
 #endif // VK_USE_PLATFORM_XLIB_XRANDR_EXT
@@ -5558,6 +5907,7 @@ VkResult DispatchGetPhysicalDeviceSurfaceCapabilities2EXT(
     }
     VkResult result = layer_data->instance_dispatch_table.GetPhysicalDeviceSurfaceCapabilities2EXT(physicalDevice, surface, pSurfaceCapabilities);
 
+    pool.clear();
     return result;
 }
 
@@ -5573,6 +5923,7 @@ VkResult DispatchDisplayPowerControlEXT(
     }
     VkResult result = layer_data->device_dispatch_table.DisplayPowerControlEXT(device, display, pDisplayPowerInfo);
 
+    pool.clear();
     return result;
 }
 
@@ -5588,6 +5939,7 @@ VkResult DispatchRegisterDeviceEventEXT(
     if (VK_SUCCESS == result) {
         *pFence = layer_data->WrapNew(*pFence);
     }
+    pool.clear();
     return result;
 }
 
@@ -5607,6 +5959,7 @@ VkResult DispatchRegisterDisplayEventEXT(
     if (VK_SUCCESS == result) {
         *pFence = layer_data->WrapNew(*pFence);
     }
+    pool.clear();
     return result;
 }
 
@@ -5623,6 +5976,7 @@ VkResult DispatchGetSwapchainCounterEXT(
     }
     VkResult result = layer_data->device_dispatch_table.GetSwapchainCounterEXT(device, swapchain, counter, pCounterValue);
 
+    pool.clear();
     return result;
 }
 
@@ -5638,6 +5992,7 @@ VkResult DispatchGetRefreshCycleDurationGOOGLE(
     }
     VkResult result = layer_data->device_dispatch_table.GetRefreshCycleDurationGOOGLE(device, swapchain, pDisplayTimingProperties);
 
+    pool.clear();
     return result;
 }
 
@@ -5654,6 +6009,7 @@ VkResult DispatchGetPastPresentationTimingGOOGLE(
     }
     VkResult result = layer_data->device_dispatch_table.GetPastPresentationTimingGOOGLE(device, swapchain, pPresentationTimingCount, pPresentationTimings);
 
+    pool.clear();
     return result;
 }
 
@@ -5666,6 +6022,7 @@ void DispatchCmdSetDiscardRectangleEXT(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     layer_data->device_dispatch_table.CmdSetDiscardRectangleEXT(commandBuffer, firstDiscardRectangle, discardRectangleCount, pDiscardRectangles);
 
+    pool.clear();
 }
 
 void DispatchSetHdrMetadataEXT(
@@ -5679,7 +6036,7 @@ void DispatchSetHdrMetadataEXT(
     VkSwapchainKHR *local_pSwapchains = NULL;
     {
         if (pSwapchains) {
-            local_pSwapchains = new VkSwapchainKHR[swapchainCount];
+            local_pSwapchains = new (pool) VkSwapchainKHR[swapchainCount];
             for (uint32_t index0 = 0; index0 < swapchainCount; ++index0) {
                 local_pSwapchains[index0] = layer_data->Unwrap(pSwapchains[index0]);
             }
@@ -5688,6 +6045,7 @@ void DispatchSetHdrMetadataEXT(
     layer_data->device_dispatch_table.SetHdrMetadataEXT(device, swapchainCount, (const VkSwapchainKHR*)local_pSwapchains, pMetadata);
     if (local_pSwapchains)
         delete[] local_pSwapchains;
+    pool.clear();
 }
 
 #ifdef VK_USE_PLATFORM_IOS_MVK
@@ -5704,6 +6062,7 @@ VkResult DispatchCreateIOSSurfaceMVK(
     if (VK_SUCCESS == result) {
         *pSurface = layer_data->WrapNew(*pSurface);
     }
+    pool.clear();
     return result;
 }
 #endif // VK_USE_PLATFORM_IOS_MVK
@@ -5722,6 +6081,7 @@ VkResult DispatchCreateMacOSSurfaceMVK(
     if (VK_SUCCESS == result) {
         *pSurface = layer_data->WrapNew(*pSurface);
     }
+    pool.clear();
     return result;
 }
 #endif // VK_USE_PLATFORM_MACOS_MVK
@@ -5737,6 +6097,7 @@ void DispatchQueueBeginDebugUtilsLabelEXT(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(queue), layer_data_map);
     layer_data->device_dispatch_table.QueueBeginDebugUtilsLabelEXT(queue, pLabelInfo);
 
+    pool.clear();
 }
 
 void DispatchQueueEndDebugUtilsLabelEXT(
@@ -5745,6 +6106,7 @@ void DispatchQueueEndDebugUtilsLabelEXT(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(queue), layer_data_map);
     layer_data->device_dispatch_table.QueueEndDebugUtilsLabelEXT(queue);
 
+    pool.clear();
 }
 
 void DispatchQueueInsertDebugUtilsLabelEXT(
@@ -5754,6 +6116,7 @@ void DispatchQueueInsertDebugUtilsLabelEXT(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(queue), layer_data_map);
     layer_data->device_dispatch_table.QueueInsertDebugUtilsLabelEXT(queue, pLabelInfo);
 
+    pool.clear();
 }
 
 void DispatchCmdBeginDebugUtilsLabelEXT(
@@ -5763,6 +6126,7 @@ void DispatchCmdBeginDebugUtilsLabelEXT(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     layer_data->device_dispatch_table.CmdBeginDebugUtilsLabelEXT(commandBuffer, pLabelInfo);
 
+    pool.clear();
 }
 
 void DispatchCmdEndDebugUtilsLabelEXT(
@@ -5771,6 +6135,7 @@ void DispatchCmdEndDebugUtilsLabelEXT(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     layer_data->device_dispatch_table.CmdEndDebugUtilsLabelEXT(commandBuffer);
 
+    pool.clear();
 }
 
 void DispatchCmdInsertDebugUtilsLabelEXT(
@@ -5780,6 +6145,7 @@ void DispatchCmdInsertDebugUtilsLabelEXT(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     layer_data->device_dispatch_table.CmdInsertDebugUtilsLabelEXT(commandBuffer, pLabelInfo);
 
+    pool.clear();
 }
 
 VkResult DispatchCreateDebugUtilsMessengerEXT(
@@ -5794,6 +6160,7 @@ VkResult DispatchCreateDebugUtilsMessengerEXT(
     if (VK_SUCCESS == result) {
         *pMessenger = layer_data->WrapNew(*pMessenger);
     }
+    pool.clear();
     return result;
 }
 
@@ -5813,6 +6180,7 @@ void DispatchDestroyDebugUtilsMessengerEXT(
     }
     layer_data->instance_dispatch_table.DestroyDebugUtilsMessengerEXT(instance, messenger, pAllocator);
 
+    pool.clear();
 }
 
 void DispatchSubmitDebugUtilsMessageEXT(
@@ -5824,6 +6192,7 @@ void DispatchSubmitDebugUtilsMessageEXT(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(instance), layer_data_map);
     layer_data->instance_dispatch_table.SubmitDebugUtilsMessageEXT(instance, messageSeverity, messageTypes, pCallbackData);
 
+    pool.clear();
 }
 
 #ifdef VK_USE_PLATFORM_ANDROID_KHR
@@ -5836,6 +6205,7 @@ VkResult DispatchGetAndroidHardwareBufferPropertiesANDROID(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(device), layer_data_map);
     VkResult result = layer_data->device_dispatch_table.GetAndroidHardwareBufferPropertiesANDROID(device, buffer, pProperties);
 
+    pool.clear();
     return result;
 }
 #endif // VK_USE_PLATFORM_ANDROID_KHR
@@ -5852,7 +6222,7 @@ VkResult DispatchGetMemoryAndroidHardwareBufferANDROID(
     safe_VkMemoryGetAndroidHardwareBufferInfoANDROID *local_pInfo = NULL;
     {
         if (pInfo) {
-            local_pInfo = new safe_VkMemoryGetAndroidHardwareBufferInfoANDROID(pInfo);
+            local_pInfo = new (pool) safe_VkMemoryGetAndroidHardwareBufferInfoANDROID(pInfo);
             if (pInfo->memory) {
                 local_pInfo->memory = layer_data->Unwrap(pInfo->memory);
             }
@@ -5862,6 +6232,7 @@ VkResult DispatchGetMemoryAndroidHardwareBufferANDROID(
     if (local_pInfo) {
         delete local_pInfo;
     }
+    pool.clear();
     return result;
 }
 #endif // VK_USE_PLATFORM_ANDROID_KHR
@@ -5873,6 +6244,7 @@ void DispatchCmdSetSampleLocationsEXT(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     layer_data->device_dispatch_table.CmdSetSampleLocationsEXT(commandBuffer, pSampleLocationsInfo);
 
+    pool.clear();
 }
 
 void DispatchGetPhysicalDeviceMultisamplePropertiesEXT(
@@ -5883,6 +6255,7 @@ void DispatchGetPhysicalDeviceMultisamplePropertiesEXT(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(physicalDevice), layer_data_map);
     layer_data->instance_dispatch_table.GetPhysicalDeviceMultisamplePropertiesEXT(physicalDevice, samples, pMultisampleProperties);
 
+    pool.clear();
 }
 
 VkResult DispatchGetImageDrmFormatModifierPropertiesEXT(
@@ -5897,6 +6270,7 @@ VkResult DispatchGetImageDrmFormatModifierPropertiesEXT(
     }
     VkResult result = layer_data->device_dispatch_table.GetImageDrmFormatModifierPropertiesEXT(device, image, pProperties);
 
+    pool.clear();
     return result;
 }
 
@@ -5912,6 +6286,7 @@ VkResult DispatchCreateValidationCacheEXT(
     if (VK_SUCCESS == result) {
         *pValidationCache = layer_data->WrapNew(*pValidationCache);
     }
+    pool.clear();
     return result;
 }
 
@@ -5931,6 +6306,7 @@ void DispatchDestroyValidationCacheEXT(
     }
     layer_data->device_dispatch_table.DestroyValidationCacheEXT(device, validationCache, pAllocator);
 
+    pool.clear();
 }
 
 VkResult DispatchMergeValidationCachesEXT(
@@ -5945,7 +6321,7 @@ VkResult DispatchMergeValidationCachesEXT(
     {
         dstCache = layer_data->Unwrap(dstCache);
         if (pSrcCaches) {
-            local_pSrcCaches = new VkValidationCacheEXT[srcCacheCount];
+            local_pSrcCaches = new (pool) VkValidationCacheEXT[srcCacheCount];
             for (uint32_t index0 = 0; index0 < srcCacheCount; ++index0) {
                 local_pSrcCaches[index0] = layer_data->Unwrap(pSrcCaches[index0]);
             }
@@ -5954,6 +6330,7 @@ VkResult DispatchMergeValidationCachesEXT(
     VkResult result = layer_data->device_dispatch_table.MergeValidationCachesEXT(device, dstCache, srcCacheCount, (const VkValidationCacheEXT*)local_pSrcCaches);
     if (local_pSrcCaches)
         delete[] local_pSrcCaches;
+    pool.clear();
     return result;
 }
 
@@ -5970,6 +6347,7 @@ VkResult DispatchGetValidationCacheDataEXT(
     }
     VkResult result = layer_data->device_dispatch_table.GetValidationCacheDataEXT(device, validationCache, pDataSize, pData);
 
+    pool.clear();
     return result;
 }
 
@@ -5985,6 +6363,7 @@ void DispatchCmdBindShadingRateImageNV(
     }
     layer_data->device_dispatch_table.CmdBindShadingRateImageNV(commandBuffer, imageView, imageLayout);
 
+    pool.clear();
 }
 
 void DispatchCmdSetViewportShadingRatePaletteNV(
@@ -5996,6 +6375,7 @@ void DispatchCmdSetViewportShadingRatePaletteNV(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     layer_data->device_dispatch_table.CmdSetViewportShadingRatePaletteNV(commandBuffer, firstViewport, viewportCount, pShadingRatePalettes);
 
+    pool.clear();
 }
 
 void DispatchCmdSetCoarseSampleOrderNV(
@@ -6007,6 +6387,7 @@ void DispatchCmdSetCoarseSampleOrderNV(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     layer_data->device_dispatch_table.CmdSetCoarseSampleOrderNV(commandBuffer, sampleOrderType, customSampleOrderCount, pCustomSampleOrders);
 
+    pool.clear();
 }
 
 VkResult DispatchCreateAccelerationStructureNV(
@@ -6020,7 +6401,7 @@ VkResult DispatchCreateAccelerationStructureNV(
     safe_VkAccelerationStructureCreateInfoNV *local_pCreateInfo = NULL;
     {
         if (pCreateInfo) {
-            local_pCreateInfo = new safe_VkAccelerationStructureCreateInfoNV(pCreateInfo);
+            local_pCreateInfo = new (pool) safe_VkAccelerationStructureCreateInfoNV(pCreateInfo);
             if (local_pCreateInfo->info.pGeometries) {
                 for (uint32_t index2 = 0; index2 < local_pCreateInfo->info.geometryCount; ++index2) {
                     if (pCreateInfo->info.pGeometries[index2].geometry.triangles.vertexData) {
@@ -6046,6 +6427,7 @@ VkResult DispatchCreateAccelerationStructureNV(
     if (VK_SUCCESS == result) {
         *pAccelerationStructure = layer_data->WrapNew(*pAccelerationStructure);
     }
+    pool.clear();
     return result;
 }
 
@@ -6065,6 +6447,7 @@ void DispatchDestroyAccelerationStructureNV(
     }
     layer_data->device_dispatch_table.DestroyAccelerationStructureNV(device, accelerationStructure, pAllocator);
 
+    pool.clear();
 }
 
 void DispatchGetAccelerationStructureMemoryRequirementsNV(
@@ -6077,7 +6460,7 @@ void DispatchGetAccelerationStructureMemoryRequirementsNV(
     safe_VkAccelerationStructureMemoryRequirementsInfoNV *local_pInfo = NULL;
     {
         if (pInfo) {
-            local_pInfo = new safe_VkAccelerationStructureMemoryRequirementsInfoNV(pInfo);
+            local_pInfo = new (pool) safe_VkAccelerationStructureMemoryRequirementsInfoNV(pInfo);
             if (pInfo->accelerationStructure) {
                 local_pInfo->accelerationStructure = layer_data->Unwrap(pInfo->accelerationStructure);
             }
@@ -6087,6 +6470,7 @@ void DispatchGetAccelerationStructureMemoryRequirementsNV(
     if (local_pInfo) {
         delete local_pInfo;
     }
+    pool.clear();
 }
 
 VkResult DispatchBindAccelerationStructureMemoryNV(
@@ -6099,7 +6483,7 @@ VkResult DispatchBindAccelerationStructureMemoryNV(
     safe_VkBindAccelerationStructureMemoryInfoNV *local_pBindInfos = NULL;
     {
         if (pBindInfos) {
-            local_pBindInfos = new safe_VkBindAccelerationStructureMemoryInfoNV[bindInfoCount];
+            local_pBindInfos = new (pool) safe_VkBindAccelerationStructureMemoryInfoNV[bindInfoCount];
             for (uint32_t index0 = 0; index0 < bindInfoCount; ++index0) {
                 local_pBindInfos[index0].initialize(&pBindInfos[index0]);
                 if (pBindInfos[index0].accelerationStructure) {
@@ -6115,6 +6499,7 @@ VkResult DispatchBindAccelerationStructureMemoryNV(
     if (local_pBindInfos) {
         delete[] local_pBindInfos;
     }
+    pool.clear();
     return result;
 }
 
@@ -6134,7 +6519,7 @@ void DispatchCmdBuildAccelerationStructureNV(
     safe_VkAccelerationStructureInfoNV *local_pInfo = NULL;
     {
         if (pInfo) {
-            local_pInfo = new safe_VkAccelerationStructureInfoNV(pInfo);
+            local_pInfo = new (pool) safe_VkAccelerationStructureInfoNV(pInfo);
             if (local_pInfo->pGeometries) {
                 for (uint32_t index1 = 0; index1 < local_pInfo->geometryCount; ++index1) {
                     if (pInfo->pGeometries[index1].geometry.triangles.vertexData) {
@@ -6161,6 +6546,7 @@ void DispatchCmdBuildAccelerationStructureNV(
     if (local_pInfo) {
         delete local_pInfo;
     }
+    pool.clear();
 }
 
 void DispatchCmdCopyAccelerationStructureNV(
@@ -6177,6 +6563,7 @@ void DispatchCmdCopyAccelerationStructureNV(
     }
     layer_data->device_dispatch_table.CmdCopyAccelerationStructureNV(commandBuffer, dst, src, mode);
 
+    pool.clear();
 }
 
 void DispatchCmdTraceRaysNV(
@@ -6206,6 +6593,7 @@ void DispatchCmdTraceRaysNV(
     }
     layer_data->device_dispatch_table.CmdTraceRaysNV(commandBuffer, raygenShaderBindingTableBuffer, raygenShaderBindingOffset, missShaderBindingTableBuffer, missShaderBindingOffset, missShaderBindingStride, hitShaderBindingTableBuffer, hitShaderBindingOffset, hitShaderBindingStride, callableShaderBindingTableBuffer, callableShaderBindingOffset, callableShaderBindingStride, width, height, depth);
 
+    pool.clear();
 }
 
 VkResult DispatchCreateRayTracingPipelinesNV(
@@ -6222,7 +6610,7 @@ VkResult DispatchCreateRayTracingPipelinesNV(
     {
         pipelineCache = layer_data->Unwrap(pipelineCache);
         if (pCreateInfos) {
-            local_pCreateInfos = new safe_VkRayTracingPipelineCreateInfoNV[createInfoCount];
+            local_pCreateInfos = new (pool) safe_VkRayTracingPipelineCreateInfoNV[createInfoCount];
             for (uint32_t index0 = 0; index0 < createInfoCount; ++index0) {
                 local_pCreateInfos[index0].initialize(&pCreateInfos[index0]);
                 if (local_pCreateInfos[index0].pStages) {
@@ -6250,6 +6638,7 @@ VkResult DispatchCreateRayTracingPipelinesNV(
             pPipelines[index0] = layer_data->WrapNew(pPipelines[index0]);
         }
     }
+    pool.clear();
     return result;
 }
 
@@ -6268,6 +6657,7 @@ VkResult DispatchGetRayTracingShaderGroupHandlesNV(
     }
     VkResult result = layer_data->device_dispatch_table.GetRayTracingShaderGroupHandlesNV(device, pipeline, firstGroup, groupCount, dataSize, pData);
 
+    pool.clear();
     return result;
 }
 
@@ -6284,6 +6674,7 @@ VkResult DispatchGetAccelerationStructureHandleNV(
     }
     VkResult result = layer_data->device_dispatch_table.GetAccelerationStructureHandleNV(device, accelerationStructure, dataSize, pData);
 
+    pool.clear();
     return result;
 }
 
@@ -6300,7 +6691,7 @@ void DispatchCmdWriteAccelerationStructuresPropertiesNV(
     VkAccelerationStructureNV *local_pAccelerationStructures = NULL;
     {
         if (pAccelerationStructures) {
-            local_pAccelerationStructures = new VkAccelerationStructureNV[accelerationStructureCount];
+            local_pAccelerationStructures = new (pool) VkAccelerationStructureNV[accelerationStructureCount];
             for (uint32_t index0 = 0; index0 < accelerationStructureCount; ++index0) {
                 local_pAccelerationStructures[index0] = layer_data->Unwrap(pAccelerationStructures[index0]);
             }
@@ -6310,6 +6701,7 @@ void DispatchCmdWriteAccelerationStructuresPropertiesNV(
     layer_data->device_dispatch_table.CmdWriteAccelerationStructuresPropertiesNV(commandBuffer, accelerationStructureCount, (const VkAccelerationStructureNV*)local_pAccelerationStructures, queryType, queryPool, firstQuery);
     if (local_pAccelerationStructures)
         delete[] local_pAccelerationStructures;
+    pool.clear();
 }
 
 VkResult DispatchCompileDeferredNV(
@@ -6324,6 +6716,7 @@ VkResult DispatchCompileDeferredNV(
     }
     VkResult result = layer_data->device_dispatch_table.CompileDeferredNV(device, pipeline, shader);
 
+    pool.clear();
     return result;
 }
 
@@ -6336,6 +6729,7 @@ VkResult DispatchGetMemoryHostPointerPropertiesEXT(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(device), layer_data_map);
     VkResult result = layer_data->device_dispatch_table.GetMemoryHostPointerPropertiesEXT(device, handleType, pHostPointer, pMemoryHostPointerProperties);
 
+    pool.clear();
     return result;
 }
 
@@ -6353,6 +6747,7 @@ void DispatchCmdWriteBufferMarkerAMD(
     }
     layer_data->device_dispatch_table.CmdWriteBufferMarkerAMD(commandBuffer, pipelineStage, dstBuffer, dstOffset, marker);
 
+    pool.clear();
 }
 
 VkResult DispatchGetPhysicalDeviceCalibrateableTimeDomainsEXT(
@@ -6363,6 +6758,7 @@ VkResult DispatchGetPhysicalDeviceCalibrateableTimeDomainsEXT(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(physicalDevice), layer_data_map);
     VkResult result = layer_data->instance_dispatch_table.GetPhysicalDeviceCalibrateableTimeDomainsEXT(physicalDevice, pTimeDomainCount, pTimeDomains);
 
+    pool.clear();
     return result;
 }
 
@@ -6376,6 +6772,7 @@ VkResult DispatchGetCalibratedTimestampsEXT(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(device), layer_data_map);
     VkResult result = layer_data->device_dispatch_table.GetCalibratedTimestampsEXT(device, timestampCount, pTimestampInfos, pTimestamps, pMaxDeviation);
 
+    pool.clear();
     return result;
 }
 
@@ -6387,6 +6784,7 @@ void DispatchCmdDrawMeshTasksNV(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     layer_data->device_dispatch_table.CmdDrawMeshTasksNV(commandBuffer, taskCount, firstTask);
 
+    pool.clear();
 }
 
 void DispatchCmdDrawMeshTasksIndirectNV(
@@ -6403,6 +6801,7 @@ void DispatchCmdDrawMeshTasksIndirectNV(
     }
     layer_data->device_dispatch_table.CmdDrawMeshTasksIndirectNV(commandBuffer, buffer, offset, drawCount, stride);
 
+    pool.clear();
 }
 
 void DispatchCmdDrawMeshTasksIndirectCountNV(
@@ -6422,6 +6821,7 @@ void DispatchCmdDrawMeshTasksIndirectCountNV(
     }
     layer_data->device_dispatch_table.CmdDrawMeshTasksIndirectCountNV(commandBuffer, buffer, offset, countBuffer, countBufferOffset, maxDrawCount, stride);
 
+    pool.clear();
 }
 
 void DispatchCmdSetExclusiveScissorNV(
@@ -6433,6 +6833,7 @@ void DispatchCmdSetExclusiveScissorNV(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     layer_data->device_dispatch_table.CmdSetExclusiveScissorNV(commandBuffer, firstExclusiveScissor, exclusiveScissorCount, pExclusiveScissors);
 
+    pool.clear();
 }
 
 void DispatchCmdSetCheckpointNV(
@@ -6442,6 +6843,7 @@ void DispatchCmdSetCheckpointNV(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     layer_data->device_dispatch_table.CmdSetCheckpointNV(commandBuffer, pCheckpointMarker);
 
+    pool.clear();
 }
 
 void DispatchGetQueueCheckpointDataNV(
@@ -6452,6 +6854,7 @@ void DispatchGetQueueCheckpointDataNV(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(queue), layer_data_map);
     layer_data->device_dispatch_table.GetQueueCheckpointDataNV(queue, pCheckpointDataCount, pCheckpointData);
 
+    pool.clear();
 }
 
 VkResult DispatchInitializePerformanceApiINTEL(
@@ -6461,6 +6864,7 @@ VkResult DispatchInitializePerformanceApiINTEL(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(device), layer_data_map);
     VkResult result = layer_data->device_dispatch_table.InitializePerformanceApiINTEL(device, pInitializeInfo);
 
+    pool.clear();
     return result;
 }
 
@@ -6470,6 +6874,7 @@ void DispatchUninitializePerformanceApiINTEL(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(device), layer_data_map);
     layer_data->device_dispatch_table.UninitializePerformanceApiINTEL(device);
 
+    pool.clear();
 }
 
 VkResult DispatchCmdSetPerformanceMarkerINTEL(
@@ -6479,6 +6884,7 @@ VkResult DispatchCmdSetPerformanceMarkerINTEL(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     VkResult result = layer_data->device_dispatch_table.CmdSetPerformanceMarkerINTEL(commandBuffer, pMarkerInfo);
 
+    pool.clear();
     return result;
 }
 
@@ -6489,6 +6895,7 @@ VkResult DispatchCmdSetPerformanceStreamMarkerINTEL(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     VkResult result = layer_data->device_dispatch_table.CmdSetPerformanceStreamMarkerINTEL(commandBuffer, pMarkerInfo);
 
+    pool.clear();
     return result;
 }
 
@@ -6499,6 +6906,7 @@ VkResult DispatchCmdSetPerformanceOverrideINTEL(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     VkResult result = layer_data->device_dispatch_table.CmdSetPerformanceOverrideINTEL(commandBuffer, pOverrideInfo);
 
+    pool.clear();
     return result;
 }
 
@@ -6514,6 +6922,7 @@ VkResult DispatchAcquirePerformanceConfigurationINTEL(
     }
     VkResult result = layer_data->device_dispatch_table.AcquirePerformanceConfigurationINTEL(device, pAcquireInfo, pConfiguration);
 
+    pool.clear();
     return result;
 }
 
@@ -6528,6 +6937,7 @@ VkResult DispatchReleasePerformanceConfigurationINTEL(
     }
     VkResult result = layer_data->device_dispatch_table.ReleasePerformanceConfigurationINTEL(device, configuration);
 
+    pool.clear();
     return result;
 }
 
@@ -6542,6 +6952,7 @@ VkResult DispatchQueueSetPerformanceConfigurationINTEL(
     }
     VkResult result = layer_data->device_dispatch_table.QueueSetPerformanceConfigurationINTEL(queue, configuration);
 
+    pool.clear();
     return result;
 }
 
@@ -6553,6 +6964,7 @@ VkResult DispatchGetPerformanceParameterINTEL(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(device), layer_data_map);
     VkResult result = layer_data->device_dispatch_table.GetPerformanceParameterINTEL(device, parameter, pValue);
 
+    pool.clear();
     return result;
 }
 
@@ -6568,6 +6980,7 @@ void DispatchSetLocalDimmingAMD(
     }
     layer_data->device_dispatch_table.SetLocalDimmingAMD(device, swapChain, localDimmingEnable);
 
+    pool.clear();
 }
 
 #ifdef VK_USE_PLATFORM_FUCHSIA
@@ -6584,6 +6997,7 @@ VkResult DispatchCreateImagePipeSurfaceFUCHSIA(
     if (VK_SUCCESS == result) {
         *pSurface = layer_data->WrapNew(*pSurface);
     }
+    pool.clear();
     return result;
 }
 #endif // VK_USE_PLATFORM_FUCHSIA
@@ -6602,6 +7016,7 @@ VkResult DispatchCreateMetalSurfaceEXT(
     if (VK_SUCCESS == result) {
         *pSurface = layer_data->WrapNew(*pSurface);
     }
+    pool.clear();
     return result;
 }
 #endif // VK_USE_PLATFORM_METAL_EXT
@@ -6615,7 +7030,7 @@ VkDeviceAddress DispatchGetBufferDeviceAddressEXT(
     safe_VkBufferDeviceAddressInfoEXT *local_pInfo = NULL;
     {
         if (pInfo) {
-            local_pInfo = new safe_VkBufferDeviceAddressInfoEXT(pInfo);
+            local_pInfo = new (pool) safe_VkBufferDeviceAddressInfoEXT(pInfo);
             if (pInfo->buffer) {
                 local_pInfo->buffer = layer_data->Unwrap(pInfo->buffer);
             }
@@ -6625,6 +7040,7 @@ VkDeviceAddress DispatchGetBufferDeviceAddressEXT(
     if (local_pInfo) {
         delete local_pInfo;
     }
+    pool.clear();
     return result;
 }
 
@@ -6636,6 +7052,7 @@ VkResult DispatchGetPhysicalDeviceCooperativeMatrixPropertiesNV(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(physicalDevice), layer_data_map);
     VkResult result = layer_data->instance_dispatch_table.GetPhysicalDeviceCooperativeMatrixPropertiesNV(physicalDevice, pPropertyCount, pProperties);
 
+    pool.clear();
     return result;
 }
 
@@ -6647,6 +7064,7 @@ VkResult DispatchGetPhysicalDeviceSupportedFramebufferMixedSamplesCombinationsNV
     auto layer_data = GetLayerDataPtr(get_dispatch_key(physicalDevice), layer_data_map);
     VkResult result = layer_data->instance_dispatch_table.GetPhysicalDeviceSupportedFramebufferMixedSamplesCombinationsNV(physicalDevice, pCombinationCount, pCombinations);
 
+    pool.clear();
     return result;
 }
 
@@ -6663,7 +7081,7 @@ VkResult DispatchGetPhysicalDeviceSurfacePresentModes2EXT(
     safe_VkPhysicalDeviceSurfaceInfo2KHR *local_pSurfaceInfo = NULL;
     {
         if (pSurfaceInfo) {
-            local_pSurfaceInfo = new safe_VkPhysicalDeviceSurfaceInfo2KHR(pSurfaceInfo);
+            local_pSurfaceInfo = new (pool) safe_VkPhysicalDeviceSurfaceInfo2KHR(pSurfaceInfo);
             if (pSurfaceInfo->surface) {
                 local_pSurfaceInfo->surface = layer_data->Unwrap(pSurfaceInfo->surface);
             }
@@ -6673,6 +7091,7 @@ VkResult DispatchGetPhysicalDeviceSurfacePresentModes2EXT(
     if (local_pSurfaceInfo) {
         delete local_pSurfaceInfo;
     }
+    pool.clear();
     return result;
 }
 #endif // VK_USE_PLATFORM_WIN32_KHR
@@ -6690,6 +7109,7 @@ VkResult DispatchAcquireFullScreenExclusiveModeEXT(
     }
     VkResult result = layer_data->device_dispatch_table.AcquireFullScreenExclusiveModeEXT(device, swapchain);
 
+    pool.clear();
     return result;
 }
 #endif // VK_USE_PLATFORM_WIN32_KHR
@@ -6707,6 +7127,7 @@ VkResult DispatchReleaseFullScreenExclusiveModeEXT(
     }
     VkResult result = layer_data->device_dispatch_table.ReleaseFullScreenExclusiveModeEXT(device, swapchain);
 
+    pool.clear();
     return result;
 }
 #endif // VK_USE_PLATFORM_WIN32_KHR
@@ -6723,7 +7144,7 @@ VkResult DispatchGetDeviceGroupSurfacePresentModes2EXT(
     safe_VkPhysicalDeviceSurfaceInfo2KHR *local_pSurfaceInfo = NULL;
     {
         if (pSurfaceInfo) {
-            local_pSurfaceInfo = new safe_VkPhysicalDeviceSurfaceInfo2KHR(pSurfaceInfo);
+            local_pSurfaceInfo = new (pool) safe_VkPhysicalDeviceSurfaceInfo2KHR(pSurfaceInfo);
             if (pSurfaceInfo->surface) {
                 local_pSurfaceInfo->surface = layer_data->Unwrap(pSurfaceInfo->surface);
             }
@@ -6733,6 +7154,7 @@ VkResult DispatchGetDeviceGroupSurfacePresentModes2EXT(
     if (local_pSurfaceInfo) {
         delete local_pSurfaceInfo;
     }
+    pool.clear();
     return result;
 }
 #endif // VK_USE_PLATFORM_WIN32_KHR
@@ -6749,6 +7171,7 @@ VkResult DispatchCreateHeadlessSurfaceEXT(
     if (VK_SUCCESS == result) {
         *pSurface = layer_data->WrapNew(*pSurface);
     }
+    pool.clear();
     return result;
 }
 
@@ -6760,6 +7183,7 @@ void DispatchCmdSetLineStippleEXT(
     auto layer_data = GetLayerDataPtr(get_dispatch_key(commandBuffer), layer_data_map);
     layer_data->device_dispatch_table.CmdSetLineStippleEXT(commandBuffer, lineStippleFactor, lineStipplePattern);
 
+    pool.clear();
 }
 
 void DispatchResetQueryPoolEXT(
@@ -6775,4 +7199,5 @@ void DispatchResetQueryPoolEXT(
     }
     layer_data->device_dispatch_table.ResetQueryPoolEXT(device, queryPool, firstQuery, queryCount);
 
+    pool.clear();
 }
