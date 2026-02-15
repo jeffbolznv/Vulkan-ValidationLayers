@@ -374,6 +374,14 @@ struct RayHitObject : public Setting {
                "gpuav_validate_ray_hit_object]\n";
     }
 };
+struct SharedMemoryDataRace : public Setting {
+    bool IsEnabled(const GpuAVSettings &settings) { return settings.shader_instrumentation.shared_memory_data_race; }
+    bool HasRequiredFeatures(const DeviceFeatures &features) { return true; }
+    void Disable(GpuAVSettings &settings) { settings.shader_instrumentation.shared_memory_data_race = false; }
+    std::string DisableMessage() {
+        return "";
+    }
+};
 struct MeshShading : public Setting {
     bool IsEnabled(const GpuAVSettings &settings) { return settings.shader_instrumentation.mesh_shading; }
     bool HasRequiredFeatures(const DeviceFeatures &features) { return features.meshShader; }
@@ -429,8 +437,9 @@ void Validator::InitSettings(const Location &loc) {
     setting::BufferCopies buffer_copies;
     setting::BufferContent buffer_content;
     setting::AccelerationStructuresBuild as_builds;
-    std::array<setting::Setting *, 7> all_settings = {&buffer_device_address, &ray_query,      &ray_hit_object,
-                                                      &mesh_shading,          &buffer_copies,  &buffer_content, &as_builds};
+    setting::SharedMemoryDataRace shared_memory_data_race;
+    std::array<setting::Setting *, 8> all_settings = {&buffer_device_address, &ray_query,      &ray_hit_object,
+                                                      &mesh_shading,          &buffer_copies,  &buffer_content, &as_builds, &shared_memory_data_race};
 
     std::string adjustment_warnings;
     for (auto &setting_object : all_settings) {

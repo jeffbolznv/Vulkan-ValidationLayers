@@ -42,6 +42,7 @@ const int kErrorGroup_InstSanitizer = 11;
 const int kErrorGroup_GpuPreBuildAccelerationStructures = 12;
 const int kErrorGroup_InstMeshShading = 13;
 const int kErrorGroup_InstRayHitObject = 14;
+const int kErrorGroup_SharedMemoryDataRace = 15;
 
 // We just take ExecutionModel and normalize it so we only use 5 bits to store it
 const int kExecutionModel_Vertex = 0;
@@ -118,6 +119,10 @@ const int kErrorSubCode_RayHitObject_SkipTrianglesWithPipelineSkipAABBs = 13;
 const int kErrorSubCode_RayHitObject_SkipAABBsWithPipelineSkipTriangles = 14;
 const int kErrorSubCode_RayHitObject_TimeOutOfRange = 15;
 const int kErrorSubCode_RayHitObject_SBTIndexExceedsLimit = 16;
+
+// Shared Memory Data Race
+const int kErrorSubCode_SharedMemoryDataRace_XXX = 1;
+
 
 // MeshShading
 //
