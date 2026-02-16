@@ -67,6 +67,8 @@ struct Type {
     // 64-bit floats/int take up 2 dwords
     bool Is64Bit() const;
 
+    uint32_t NumScalarElements(TypeManager& type_manager_) const;
+
     const SpvType spv_type_;
     const Instruction& inst_;
 };
@@ -163,6 +165,7 @@ class TypeManager {
     const Variable& AddVariable(std::unique_ptr<Instruction> new_inst, const Type& type);
     const Variable* FindVariableById(uint32_t id) const;
     const Variable* FindPushConstantVariable() const;
+    const std::vector<const Variable*> &GetSharedMemoryVariables() const { return shared_memory_variables_; }
 
     void AddUndef(std::unique_ptr<Instruction> new_inst);
     bool IsUndef(uint32_t id) const;
@@ -213,6 +216,7 @@ class TypeManager {
     std::vector<const Variable*> output_variables_;
     // There is invalid to have more than 1 push constant variable per entrypoint
     const Variable* push_constant_variable_ = nullptr;
+    std::vector<const Variable*> shared_memory_variables_;
 
     // Save the length of a struct so we don't have to look it up everytime
     // <struct_id, struct size>

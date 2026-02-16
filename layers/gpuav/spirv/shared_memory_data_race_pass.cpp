@@ -18,6 +18,7 @@
 #include "module.h"
 #include <spirv/unified1/spirv.hpp>
 #include <iostream>
+#include <map>
 
 #include "generated/gpuav_offline_spirv.h"
 
@@ -96,6 +97,35 @@ bool SharedMemoryDataRacePass::RequiresInstrumentation(const Instruction& inst, 
 }
 
 bool SharedMemoryDataRacePass::Instrument() {
+
+    const std::vector<const Variable*> & shmem_vars = type_manager_.GetSharedMemoryVariables();
+
+    std::map<const Variable*, uint32_t> slot_start;
+    uint32_t num_slots = 0;
+    for (auto &v : shmem_vars) {
+        const Type *pointee_type = v->PointerType(type_manager_);
+        slot_start[v] = num_slots;
+        uint32_t num_scalar_elements = pointee_type->NumScalarElements(type_manager_);
+        if (num_scalar_elements == 0) {
+            // XXX not yet supported
+            return false;
+        }
+        num_slots += num_scalar_elements;
+    }
+
+    if (num_slots == 0) {
+        return false;
+    }
+
+    auto &uint32_ty = type_manager_.GetTypeInt(32, false);
+    auto &uint32_arr_ty = type_manager_.GetTypeArray(uint32_ty, type_manager_.CreateConstantUInt32(num_slots));
+    auto &uint32_ptr_ty = type_manager_.GetTypePointer(spv::StorageClassWorkgroup, uint32_arr_ty);
+
+    auto variable_id = module_.TakeNextId();
+
+    auto shadow_var = std::make_unique<Instruction>(4, spv::OpVariable);
+    shadow_var->Fill({uint32_ptr_ty.Id(), variable_id, spv::StorageClassWorkgroup});
+
 #if 0
     // Can safely loop function list as there is no injecting of new Functions until linking time
     for (Function& function : module_.functions_) {

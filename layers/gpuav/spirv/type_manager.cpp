@@ -685,6 +685,8 @@ const Variable& TypeManager::AddVariable(std::unique_ptr<Instruction> new_inst, 
         output_variables_.push_back(new_variable);
     } else if (new_variable->StorageClass() == spv::StorageClassPushConstant) {
         push_constant_variable_ = new_variable;
+    } else if (new_variable->StorageClass() == spv::StorageClassWorkgroup) {
+        shared_memory_variables_.push_back(new_variable);
     }
 
     return *new_variable;
@@ -724,6 +726,23 @@ bool Type::Is64Bit() const {
     }
     return false;
 }
+
+uint32_t Type::NumScalarElements(TypeManager& type_manager_) const {
+    switch (spv_type_) {
+    case SpvType::kArray:
+        return inst_.Word(3) * type_manager_.FindTypeById(inst_.Word(2))->NumScalarElements(type_manager_);
+    case SpvType::kVector:
+        return inst_.Word(3);
+    case SpvType::kInt:
+    case SpvType::kFloat:
+    case SpvType::kBool:
+        return 1;
+    }
+    // XXX TODO handle all types
+    assert(0);
+    return 0;
+}
+
 
 uint32_t Constant::GetValueUint32() const {
     assert(inst_.Opcode() == spv::OpConstant || inst_.Opcode() == spv::OpConstantNull);
