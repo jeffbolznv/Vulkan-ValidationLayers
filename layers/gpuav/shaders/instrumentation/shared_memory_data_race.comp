@@ -18,8 +18,68 @@
 
 #version 450
 #extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_debug_printf : enable
+#extension GL_KHR_memory_scope_semantics : enable
 #include "common_descriptor_sets.h"
 #include "error_payload.h"
+
+
+const uint STORE_BIT = 0x80000000;
+const uint ATOMIC_BIT = 0x40000000;
+const uint MULTI_LOAD_BIT = 0x20000000;
+const uint SENTINEL = 0x1FFFFFFF;
+
+shared uint shadow[99999];
+
+void init_shadow() {
+    const uint wg_size = gl_WorkGroupSize.x * gl_WorkGroupSize.y * gl_WorkGroupSize.z;
+    for (uint i = gl_LocalInvocationIndex; i < shadow.length(); i += wg_size) {
+        shadow[i] = SENTINEL;
+    }
+    barrier();
+}
+
+void do_store(uint idx, uint line) {
+    uint thread_id = gl_LocalInvocationIndex;
+    uint ret = atomicExchange(shadow[idx], thread_id | STORE_BIT);
+    if (ret != SENTINEL && ret != thread_id && ret != (thread_id | STORE_BIT)) {
+        debugPrintfEXT("race on store idx %x thread_id %x ret %x line %d\n", idx, thread_id, ret, line);
+    }
+}
+
+void do_load(uint idx, uint line) {
+    uint thread_id = gl_LocalInvocationIndex;
+
+    uint ret = atomicLoad(shadow[idx], gl_ScopeDevice, 0, 0);
+    if ((ret & (STORE_BIT | ATOMIC_BIT)) == 0 &&
+        ((ret & MULTI_LOAD_BIT) != 0 || ret == SENTINEL)) {
+        return;
+    }
+
+    ret = atomicExchange(shadow[idx], thread_id);
+    if ((ret & ATOMIC_BIT) != 0) {
+        debugPrintfEXT("race on load idx %x thread_id %x ret %x line %d\n", idx, thread_id, ret, line);
+    } else if (ret == (thread_id | STORE_BIT)) {
+        ret = atomicExchange(shadow[idx], thread_id | STORE_BIT);
+        if (ret != thread_id) {
+            debugPrintfEXT("race on load idx %x thread_id %x ret %x line %d\n", idx, thread_id, ret, line);
+        }
+    } else if ((ret & STORE_BIT) != 0) {
+        debugPrintfEXT("race on load idx %x thread_id %x ret %x line %d\n", idx, thread_id, ret, line);
+    } else if ((ret & MULTI_LOAD_BIT) != 0 || (ret & ~MULTI_LOAD_BIT) != thread_id) {
+        ret = atomicOr(shadow[idx], MULTI_LOAD_BIT);
+        if ((ret & (STORE_BIT | ATOMIC_BIT)) != 0) {
+            debugPrintfEXT("race on load idx %x thread_id %x ret %x line %d\n", idx, thread_id, ret, line);
+        }
+    }
+}
+void do_atomic(uint idx, uint line) {
+    uint thread_id = gl_LocalInvocationIndex;
+    uint ret = atomicExchange(shadow[idx], ATOMIC_BIT);
+    if (ret != SENTINEL && ret != ATOMIC_BIT) {
+        debugPrintfEXT("race on atomic idx %x thread_id %x ret %x line %d\n", idx, thread_id, ret, line);
+    }
+}
 
 // From SPIRV-Headers
 const uint OpHitObjectTraceReorderExecuteEXT = 5311;
