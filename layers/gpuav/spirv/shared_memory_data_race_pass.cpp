@@ -26,73 +26,85 @@ namespace gpuav {
 namespace spirv {
 
 const static OfflineModule kOfflineModule = {instrumentation_shared_memory_data_race_comp, instrumentation_shared_memory_data_race_comp_size,
-                                             UseErrorPayloadVariable};
+                                             UseErrorPayloadVariable | SharedMemoryDataRaceShadow};
 
 const static OfflineFunction kOfflineFunction = {"inst_shared_memory_data_race", instrumentation_shared_memory_data_race_comp_function_0_offset};
 
 SharedMemoryDataRacePass::SharedMemoryDataRacePass(Module& module) : Pass(module, kOfflineModule) { module.use_bda_ = true; }
 
-uint32_t SharedMemoryDataRacePass::GetLinkFunctionId() { return GetLinkFunction(link_function_id_, kOfflineFunction); }
+uint32_t SharedMemoryDataRacePass::GetLinkFunctionId(const InstructionMeta& meta) { return GetLinkFunction(link_function_id_[meta.function_idx], kOfflineFunction); }
 
 // OpHitObjectTraceRayEXT
 // OpHitObjectTraceRayMotionEXT
 // OpHitObjectTraceReorderExecuteEXT
 // OpHitObjectTraceMotionReorderExecuteEXT
 uint32_t SharedMemoryDataRacePass::CreateFunctionCall(BasicBlock& block, InstructionIt* inst_it, const InstructionMeta& meta) {
-#if 1
     const uint32_t function_result = module_.TakeNextId();
-    const uint32_t function_def = GetLinkFunctionId();
-    const uint32_t bool_type = type_manager_.GetTypeBool().Id();
+    const uint32_t function_def = GetLinkFunctionId(meta);
+    const uint32_t void_type = type_manager_.GetTypeVoid().Id();
 
-    const uint32_t opcode = meta.target_instruction->Opcode();
-
-    // All HitObject opcodes have ray parameters at the same positions
-    const uint32_t ray_flags_id = meta.target_instruction->Operand(2);
-    const uint32_t ray_origin_id = meta.target_instruction->Operand(7);
-    const uint32_t ray_tmin_id = meta.target_instruction->Operand(8);
-    const uint32_t ray_direction_id = meta.target_instruction->Operand(9);
-    const uint32_t ray_tmax_id = meta.target_instruction->Operand(10);
-
-    uint32_t time_id = 0;
-    if (opcode == spv::OpHitObjectTraceRayMotionEXT || opcode == spv::OpHitObjectTraceMotionReorderExecuteEXT) {
-        time_id = meta.target_instruction->Operand(11);
-    }
-
+    // XXX TODO can this be a source line number?
     const uint32_t inst_position = meta.target_instruction->GetPositionOffset();
     const uint32_t inst_position_id = type_manager_.CreateConstantUInt32(inst_position).Id();
 
-    const uint32_t opcode_type_id = type_manager_.CreateConstantUInt32(opcode).Id();
+    if (meta.function_idx == 0) {
+        block.CreateInstruction(spv::OpFunctionCall,
+                                {void_type, function_result, function_def},
+                                inst_it);
+    } else {
+        // XXX TODO this needs to be the real index derived from the access chain
+        const uint32_t idx_id = type_manager_.CreateConstantUInt32(0).Id();
 
-    const uint32_t pipeline_flags = (module_.interface_.instrumentation_dsl.pipeline_has_skip_aabbs_flag ? 1u : 0u) |
-                                    (module_.interface_.instrumentation_dsl.pipeline_has_skip_triangles_flag ? 2u : 0u);
-    const uint32_t pipeline_flags_id = type_manager_.CreateConstantUInt32(pipeline_flags).Id();
-
-    // For non-motion opcodes, pass 0.0 as time (valid value, won't trigger error)
-    if (time_id == 0) {
-        time_id = type_manager_.GetConstantZeroFloat32().Id();
+        block.CreateInstruction(spv::OpFunctionCall,
+                                {void_type, function_result, function_def, idx_id, inst_position_id},
+                                inst_it);
     }
-
-    block.CreateInstruction(spv::OpFunctionCall,
-                            {bool_type, function_result, function_def, inst_position_id, opcode_type_id, ray_flags_id, ray_origin_id, ray_tmin_id,
-                             ray_direction_id, ray_tmax_id, pipeline_flags_id, time_id},
-                            inst_it);
     module_.need_log_error_ = true;
     return function_result;
-#else
-    return 0;
-#endif
 }
 
 bool SharedMemoryDataRacePass::RequiresInstrumentation(const Instruction& inst, InstructionMeta& meta) {
-#if 1
     const spv::Op opcode = (spv::Op)inst.Opcode();
 
-    if (!IsValueIn(opcode, {spv::OpHitObjectTraceRayEXT, spv::OpHitObjectTraceReorderExecuteEXT, spv::OpHitObjectTraceRayMotionEXT,
-                            spv::OpHitObjectTraceMotionReorderExecuteEXT})) {
+    if (!IsValueIn(opcode, {spv::OpLoad,
+                            spv::OpStore,
+                            spv::OpControlBarrier,
+                            spv::OpAtomicLoad,
+                            spv::OpAtomicStore,
+                            spv::OpAtomicExchange,
+                            spv::OpAtomicIIncrement,
+                            spv::OpAtomicIDecrement,
+                            spv::OpAtomicIAdd,
+                            spv::OpAtomicISub,
+                            spv::OpAtomicSMin,
+                            spv::OpAtomicUMin,
+                            spv::OpAtomicSMax,
+                            spv::OpAtomicUMax,
+                            spv::OpAtomicAnd,
+                            spv::OpAtomicOr,
+                            spv::OpAtomicXor,
+                            spv::OpAtomicFMinEXT,
+                            spv::OpAtomicFMaxEXT,
+                            spv::OpAtomicFAddEXT})) {
         return false;
     }
     meta.target_instruction = &inst;
-#endif
+
+    switch (opcode) {
+    case spv::OpLoad:
+        meta.function_idx = 2;
+        break;
+    case spv::OpStore:
+        meta.function_idx = 1;
+        break;
+    case spv::OpControlBarrier:
+        meta.function_idx = 0;
+        break;
+    default:
+        meta.function_idx = 3;
+        break;
+    }
+
     return true;
 }
 
@@ -116,17 +128,18 @@ bool SharedMemoryDataRacePass::Instrument() {
     if (num_slots == 0) {
         return false;
     }
-
+#if 1
     auto &uint32_ty = type_manager_.GetTypeInt(32, false);
     auto &uint32_arr_ty = type_manager_.GetTypeArray(uint32_ty, type_manager_.CreateConstantUInt32(num_slots));
-    auto &uint32_ptr_ty = type_manager_.GetTypePointer(spv::StorageClassWorkgroup, uint32_arr_ty);
+    auto &uint32_arr_ptr_ty = type_manager_.GetTypePointer(spv::StorageClassWorkgroup, uint32_arr_ty);
 
-    auto variable_id = module_.TakeNextId();
+    module_.shared_memory_shadow_variable_id_ = module_.TakeNextId();
 
     auto shadow_var = std::make_unique<Instruction>(4, spv::OpVariable);
-    shadow_var->Fill({uint32_ptr_ty.Id(), variable_id, spv::StorageClassWorkgroup});
+    shadow_var->Fill({uint32_arr_ptr_ty.Id(), module_.shared_memory_shadow_variable_id_, spv::StorageClassWorkgroup});
+    type_manager_.AddVariable(std::move(shadow_var), uint32_arr_ptr_ty);
+#endif
 
-#if 0
     // Can safely loop function list as there is no injecting of new Functions until linking time
     for (Function& function : module_.functions_) {
         if (!function.called_from_target_) {
@@ -145,6 +158,18 @@ bool SharedMemoryDataRacePass::Instrument() {
             }
             auto& block_instructions = current_block.instructions_;
 
+            if (function.id_ == module_.target_entry_point_id_ &&
+                block_it == function.blocks_.begin()) {
+
+                auto inst_it = block_instructions.begin();
+
+                InstructionMeta meta;
+                meta.target_instruction = &*(inst_it->get());
+                meta.function_idx = 0;
+
+                CreateFunctionCall(current_block, &inst_it, meta);
+            }
+
             for (auto inst_it = block_instructions.begin(); inst_it != block_instructions.end(); ++inst_it) {
                 InstructionMeta meta;
                 // Every instruction is analyzed by the specific pass and lets us know if we need to inject a function or not
@@ -157,29 +182,10 @@ bool SharedMemoryDataRacePass::Instrument() {
                 }
                 instrumentations_count_++;
 
-                if (!module_.settings_.safe_mode) {
-                    if (meta.is_sbt_index_check) {
-                        CreateSBTIndexCheckFunctionCall(current_block, &inst_it, meta);
-                    } else {
-                        CreateFunctionCall(current_block, &inst_it, meta);
-                    }
-                } else {
-                    InjectConditionalData ic_data = InjectFunctionPre(function, block_it, inst_it);
-                    if (meta.is_sbt_index_check) {
-                        ic_data.function_result_id = CreateSBTIndexCheckFunctionCall(current_block, nullptr, meta);
-                    } else {
-                        ic_data.function_result_id = CreateFunctionCall(current_block, nullptr, meta);
-                    }
-                    InjectFunctionPost(current_block, ic_data);
-                    // Skip the newly added valid and invalid block. Start searching again from newly split merge block
-                    block_it++;
-                    block_it++;
-                    break;
-                }
+                CreateFunctionCall(current_block, &inst_it, meta);
             }
         }
     }
-#endif
     return instrumentations_count_ != 0;
 }
 

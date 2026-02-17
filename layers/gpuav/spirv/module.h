@@ -120,6 +120,8 @@ class Module {
     // Used when UseErrorPayloadVariable is set. Needs to be same for all passes.
     // Will be set in the LogErrorPass
     uint32_t error_payload_variable_id_ = 0;
+
+    uint32_t shared_memory_shadow_variable_id_ = 0;
 };
 
 }  // namespace spirv

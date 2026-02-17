@@ -31,15 +31,16 @@ class SharedMemoryDataRacePass : public Pass {
     // This is metadata tied to a single instruction gathered during RequiresInstrumentation() to be used later
     struct InstructionMeta {
         const Instruction* target_instruction = nullptr;
+        uint32_t function_idx;
     };
 
     bool RequiresInstrumentation(const Instruction& inst, InstructionMeta& meta);
     uint32_t CreateFunctionCall(BasicBlock& block, InstructionIt* inst_it, const InstructionMeta& meta);
 
-    uint32_t GetLinkFunctionId();
+    uint32_t GetLinkFunctionId(const InstructionMeta& meta);
 
     // Function IDs to link in
-    uint32_t link_function_id_ = 0;
+    uint32_t link_function_id_[4] {};
 };
 
 }  // namespace spirv

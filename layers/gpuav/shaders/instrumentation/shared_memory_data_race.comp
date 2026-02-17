@@ -81,6 +81,7 @@ void do_atomic(uint idx, uint line) {
     }
 }
 
+#if 0
 // From SPIRV-Headers
 const uint OpHitObjectTraceReorderExecuteEXT = 5311;
 const uint OpHitObjectTraceMotionReorderExecuteEXT = 5312;
@@ -188,3 +189,4 @@ bool inst_ray_hit_object_sbt_index_check(const uint inst_offset, const uint sbt_
     }
     return true;
 }
+#endif
