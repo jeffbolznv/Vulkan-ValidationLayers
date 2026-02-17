@@ -29,7 +29,7 @@ const uint ATOMIC_BIT = 0x40000000;
 const uint MULTI_LOAD_BIT = 0x20000000;
 const uint SENTINEL = 0x1FFFFFFF;
 
-shared uint shadow[99999];
+shared uint shadow[123];
 
 void init_shadow() {
     const uint wg_size = gl_WorkGroupSize.x * gl_WorkGroupSize.y * gl_WorkGroupSize.z;
@@ -39,48 +39,45 @@ void init_shadow() {
     barrier();
 }
 
-void do_store(uint start, uint idx, uint line) {
-    idx += start;
+void do_store(const in uint start, const in uint idx, const in uint line) {
     uint thread_id = gl_LocalInvocationIndex;
-    uint ret = atomicExchange(shadow[idx], thread_id | STORE_BIT);
+    uint ret = atomicExchange(shadow[start + idx], thread_id | STORE_BIT);
     if (ret != SENTINEL && ret != thread_id && ret != (thread_id | STORE_BIT)) {
-        debugPrintfEXT("race on store idx %x thread_id %x ret %x line %d\n", idx, thread_id, ret, line);
+        debugPrintfEXT("race on store start %x idx %x thread_id %x ret %x line %d\n", start, idx, thread_id, ret, line);
     }
 }
 
-void do_load(uint start, uint idx, uint line) {
-    idx += start;
+void do_load(const in uint start, const in uint idx, const in uint line) {
     uint thread_id = gl_LocalInvocationIndex;
 
-    uint ret = atomicLoad(shadow[idx], gl_ScopeDevice, 0, 0);
+    uint ret = atomicLoad(shadow[start + idx], gl_ScopeDevice, 0, 0);
     if ((ret & (STORE_BIT | ATOMIC_BIT)) == 0 &&
         ((ret & MULTI_LOAD_BIT) != 0 || ret == SENTINEL)) {
         return;
     }
 
-    ret = atomicExchange(shadow[idx], thread_id);
+    ret = atomicExchange(shadow[start + idx], thread_id);
     if ((ret & ATOMIC_BIT) != 0) {
-        debugPrintfEXT("race on load idx %x thread_id %x ret %x line %d\n", idx, thread_id, ret, line);
+        debugPrintfEXT("race on load start %x idx %x thread_id %x ret %x line %d\n", start, idx, thread_id, ret, line);
     } else if (ret == (thread_id | STORE_BIT)) {
-        ret = atomicExchange(shadow[idx], thread_id | STORE_BIT);
+        ret = atomicExchange(shadow[start + idx], thread_id | STORE_BIT);
         if (ret != thread_id) {
-            debugPrintfEXT("race on load idx %x thread_id %x ret %x line %d\n", idx, thread_id, ret, line);
+            debugPrintfEXT("race on load start %x idx %x thread_id %x ret %x line %d\n", start, idx, thread_id, ret, line);
         }
     } else if ((ret & STORE_BIT) != 0) {
-        debugPrintfEXT("race on load idx %x thread_id %x ret %x line %d\n", idx, thread_id, ret, line);
+        debugPrintfEXT("race on load start %x idx %x thread_id %x ret %x line %d\n", start, idx, thread_id, ret, line);
     } else if ((ret & MULTI_LOAD_BIT) != 0 || (ret & ~MULTI_LOAD_BIT) != thread_id) {
-        ret = atomicOr(shadow[idx], MULTI_LOAD_BIT);
+        ret = atomicOr(shadow[start + idx], MULTI_LOAD_BIT);
         if ((ret & (STORE_BIT | ATOMIC_BIT)) != 0) {
-            debugPrintfEXT("race on load idx %x thread_id %x ret %x line %d\n", idx, thread_id, ret, line);
+            debugPrintfEXT("race on load start %x idx %x thread_id %x ret %x line %d\n", start, idx, thread_id, ret, line);
         }
     }
 }
-void do_atomic(uint start, uint idx, uint line) {
-    idx += start;
+void do_atomic(const in uint start, const in uint idx, const in uint line) {
     uint thread_id = gl_LocalInvocationIndex;
-    uint ret = atomicExchange(shadow[idx], ATOMIC_BIT);
+    uint ret = atomicExchange(shadow[start + idx], ATOMIC_BIT);
     if (ret != SENTINEL && ret != ATOMIC_BIT) {
-        debugPrintfEXT("race on atomic idx %x thread_id %x ret %x line %d\n", idx, thread_id, ret, line);
+        debugPrintfEXT("race on atomic start %x idx %x thread_id %x ret %x line %d\n", start, idx, thread_id, ret, line);
     }
 }
 

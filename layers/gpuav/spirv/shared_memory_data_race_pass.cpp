@@ -27,11 +27,17 @@ namespace spirv {
 const static OfflineModule kOfflineModule = {instrumentation_shared_memory_data_race_comp, instrumentation_shared_memory_data_race_comp_size,
                                              UseErrorPayloadVariable | SharedMemoryDataRaceShadow};
 
-const static OfflineFunction kOfflineFunction = {"inst_shared_memory_data_race", instrumentation_shared_memory_data_race_comp_function_0_offset};
+const static OfflineFunction kOfflineFunction[4] =
+{
+    {"init_shadow", instrumentation_shared_memory_data_race_comp_function_0_offset},
+    {"do_store",    instrumentation_shared_memory_data_race_comp_function_1_offset},
+    {"do_load",     instrumentation_shared_memory_data_race_comp_function_2_offset},
+    {"do_atomic",   instrumentation_shared_memory_data_race_comp_function_3_offset},
+};
 
 SharedMemoryDataRacePass::SharedMemoryDataRacePass(Module& module) : Pass(module, kOfflineModule) { module.use_bda_ = true; }
 
-uint32_t SharedMemoryDataRacePass::GetLinkFunctionId(const InstructionMeta& meta) { return GetLinkFunction(link_function_id_[meta.function_idx], kOfflineFunction); }
+uint32_t SharedMemoryDataRacePass::GetLinkFunctionId(const InstructionMeta& meta) { return GetLinkFunction(link_function_id_[meta.function_idx], kOfflineFunction[meta.function_idx]); }
 
 // OpHitObjectTraceRayEXT
 // OpHitObjectTraceRayMotionEXT
@@ -121,6 +127,8 @@ bool SharedMemoryDataRacePass::RequiresInstrumentation(const Function& function,
         meta.start_id = type_manager_.GetConstantUInt32(slot_start[variable]).Id();
     }
 
+    // XXX TODO check controlbarrier scope/semantics
+
     switch (opcode) {
     case spv::OpLoad:
         meta.function_idx = 2;
@@ -192,6 +200,9 @@ bool SharedMemoryDataRacePass::Instrument() {
                 block_it == function.blocks_.begin()) {
 
                 auto inst_it = block_instructions.begin();
+                while (IsValueIn((spv::Op)inst_it->get()->Opcode(), { spv::OpLabel, spv::OpLine, spv::OpNoLine, spv::OpFunctionParameter, spv::OpVariable })) {
+                    inst_it++;
+                }
 
                 InstructionMeta meta;
                 meta.target_instruction = &*(inst_it->get());
