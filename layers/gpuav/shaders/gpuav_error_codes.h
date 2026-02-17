@@ -121,8 +121,10 @@ const int kErrorSubCode_RayHitObject_TimeOutOfRange = 15;
 const int kErrorSubCode_RayHitObject_SBTIndexExceedsLimit = 16;
 
 // Shared Memory Data Race
-const int kErrorSubCode_SharedMemoryDataRace_XXX = 1;
-
+const int kErrorSubCode_SharedMemoryDataRace_RaceOnStore = 1;
+const int kErrorSubCode_SharedMemoryDataRace_RaceOnLoadVsStore = 2;
+const int kErrorSubCode_SharedMemoryDataRace_RaceOnLoadVsAtomic = 3;
+const int kErrorSubCode_SharedMemoryDataRace_RaceOnAtomic = 4;
 
 // MeshShading
 //
