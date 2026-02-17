@@ -18,7 +18,6 @@
 #include "module.h"
 #include <spirv/unified1/spirv.hpp>
 #include <iostream>
-#include <map>
 
 #include "generated/gpuav_offline_spirv.h"
 
@@ -52,18 +51,15 @@ uint32_t SharedMemoryDataRacePass::CreateFunctionCall(BasicBlock& block, Instruc
                                 {void_type, function_result, function_def},
                                 inst_it);
     } else {
-        // XXX TODO this needs to be the real index derived from the access chain
-        const uint32_t idx_id = type_manager_.CreateConstantUInt32(0).Id();
-
         block.CreateInstruction(spv::OpFunctionCall,
-                                {void_type, function_result, function_def, idx_id, inst_position_id},
+                                {void_type, function_result, function_def, meta.start_id, meta.access_chain_idx_id, inst_position_id},
                                 inst_it);
     }
     module_.need_log_error_ = true;
     return function_result;
 }
 
-bool SharedMemoryDataRacePass::RequiresInstrumentation(const Instruction& inst, InstructionMeta& meta) {
+bool SharedMemoryDataRacePass::RequiresInstrumentation(const Function& function, const Instruction& inst, InstructionMeta& meta) {
     const spv::Op opcode = (spv::Op)inst.Opcode();
 
     if (!IsValueIn(opcode, {spv::OpLoad,
@@ -90,6 +86,41 @@ bool SharedMemoryDataRacePass::RequiresInstrumentation(const Instruction& inst, 
     }
     meta.target_instruction = &inst;
 
+    if (opcode == spv::OpLoad || opcode == spv::OpStore) {
+        uint32_t ptr_id = opcode == spv::OpStore ? inst.Word(1) : inst.Word(3);
+
+        const Variable* variable = nullptr;
+        const Instruction* access_chain_inst = function.FindInstruction(ptr_id);
+        // We need to walk down possibly multiple chained OpAccessChains or OpCopyObject to get the variable
+        while (access_chain_inst && access_chain_inst->IsNonPtrAccessChain()) {
+            const uint32_t access_chain_base_id = access_chain_inst->Operand(0);
+            variable = type_manager_.FindVariableById(access_chain_base_id);
+            if (variable) {
+                break;  // found
+            }
+            access_chain_inst = function.FindInstruction(access_chain_base_id);
+        }
+        if (!variable) {
+            return false;
+        }
+
+        const uint32_t storage_class = variable->StorageClass();
+        if (storage_class != spv::StorageClassWorkgroup) {
+            return false;
+        }
+
+        // XXX TODO handle multidim array, struct, etc.
+        const Type* pointer_type = variable->PointerType(type_manager_);
+        if (pointer_type->IsArray()) {
+            meta.access_chain_idx_id = access_chain_inst->Operand(1);
+        } else {
+            // There is no array of this descriptor, so we essentially have an array of 1
+            meta.access_chain_idx_id = type_manager_.GetConstantZeroUint32().Id();
+        }
+
+        meta.start_id = type_manager_.GetConstantUInt32(slot_start[variable]).Id();
+    }
+
     switch (opcode) {
     case spv::OpLoad:
         meta.function_idx = 2;
@@ -112,7 +143,6 @@ bool SharedMemoryDataRacePass::Instrument() {
 
     const std::vector<const Variable*> & shmem_vars = type_manager_.GetSharedMemoryVariables();
 
-    std::map<const Variable*, uint32_t> slot_start;
     uint32_t num_slots = 0;
     for (auto &v : shmem_vars) {
         const Type *pointee_type = v->PointerType(type_manager_);
@@ -173,7 +203,7 @@ bool SharedMemoryDataRacePass::Instrument() {
             for (auto inst_it = block_instructions.begin(); inst_it != block_instructions.end(); ++inst_it) {
                 InstructionMeta meta;
                 // Every instruction is analyzed by the specific pass and lets us know if we need to inject a function or not
-                if (!RequiresInstrumentation(*(inst_it->get()), meta)) {
+                if (!RequiresInstrumentation(function, *(inst_it->get()), meta)) {
                     continue;
                 }
 

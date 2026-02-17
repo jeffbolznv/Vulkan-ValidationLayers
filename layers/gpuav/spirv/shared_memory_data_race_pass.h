@@ -16,6 +16,7 @@
 
 #include <stdint.h>
 #include "pass.h"
+#include <map>
 
 namespace gpuav {
 namespace spirv {
@@ -32,15 +33,19 @@ class SharedMemoryDataRacePass : public Pass {
     struct InstructionMeta {
         const Instruction* target_instruction = nullptr;
         uint32_t function_idx;
+        uint32_t access_chain_idx_id;
+        uint32_t start_id;
     };
 
-    bool RequiresInstrumentation(const Instruction& inst, InstructionMeta& meta);
+    bool RequiresInstrumentation(const Function& function, const Instruction& inst, InstructionMeta& meta);
     uint32_t CreateFunctionCall(BasicBlock& block, InstructionIt* inst_it, const InstructionMeta& meta);
 
     uint32_t GetLinkFunctionId(const InstructionMeta& meta);
 
     // Function IDs to link in
     uint32_t link_function_id_[4] {};
+    std::map<const Variable*, uint32_t> slot_start;
+
 };
 
 }  // namespace spirv

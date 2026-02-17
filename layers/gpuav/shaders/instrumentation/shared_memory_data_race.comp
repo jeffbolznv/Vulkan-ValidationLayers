@@ -39,7 +39,8 @@ void init_shadow() {
     barrier();
 }
 
-void do_store(uint idx, uint line) {
+void do_store(uint start, uint idx, uint line) {
+    idx += start;
     uint thread_id = gl_LocalInvocationIndex;
     uint ret = atomicExchange(shadow[idx], thread_id | STORE_BIT);
     if (ret != SENTINEL && ret != thread_id && ret != (thread_id | STORE_BIT)) {
@@ -47,7 +48,8 @@ void do_store(uint idx, uint line) {
     }
 }
 
-void do_load(uint idx, uint line) {
+void do_load(uint start, uint idx, uint line) {
+    idx += start;
     uint thread_id = gl_LocalInvocationIndex;
 
     uint ret = atomicLoad(shadow[idx], gl_ScopeDevice, 0, 0);
@@ -73,7 +75,8 @@ void do_load(uint idx, uint line) {
         }
     }
 }
-void do_atomic(uint idx, uint line) {
+void do_atomic(uint start, uint idx, uint line) {
+    idx += start;
     uint thread_id = gl_LocalInvocationIndex;
     uint ret = atomicExchange(shadow[idx], ATOMIC_BIT);
     if (ret != SENTINEL && ret != ATOMIC_BIT) {
