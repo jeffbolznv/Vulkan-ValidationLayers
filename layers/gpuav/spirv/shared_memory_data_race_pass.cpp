@@ -66,7 +66,7 @@ uint32_t SharedMemoryDataRacePass::CreateFunctionCall(BasicBlock& block, Instruc
     return function_result;
 }
 
-bool SharedMemoryDataRacePass::RequiresInstrumentation(const Function& function, const Instruction& inst, InstructionMeta& meta) {
+bool SharedMemoryDataRacePass::RequiresInstrumentation(const Function& function, BasicBlock &block, InstructionIt& inst_it, const Instruction& inst, InstructionMeta& meta) {
     const spv::Op opcode = (spv::Op)inst.Opcode();
 
     if (!IsValueIn(opcode, {spv::OpLoad,
@@ -119,7 +119,12 @@ bool SharedMemoryDataRacePass::RequiresInstrumentation(const Function& function,
         // XXX TODO handle multidim array, struct, etc.
         const Type* pointer_type = variable->PointerType(type_manager_);
         if (pointer_type->IsArray()) {
-            meta.access_chain_idx_id = access_chain_inst->Operand(1);
+            // XXX TODO handle non-32b
+            // Bitcast i32 to u32
+            const uint32_t new_id = module_.TakeNextId();
+            const Type& uint32_type = type_manager_.GetTypeInt(32, false);
+            block.CreateInstruction(spv::OpBitcast, {uint32_type.Id(), new_id, access_chain_inst->Operand(1)}, &inst_it);
+            meta.access_chain_idx_id = new_id;
         } else {
             // There is no array of this descriptor, so we essentially have an array of 1
             meta.access_chain_idx_id = type_manager_.GetConstantZeroUint32().Id();
@@ -215,7 +220,7 @@ bool SharedMemoryDataRacePass::Instrument() {
             for (auto inst_it = block_instructions.begin(); inst_it != block_instructions.end(); ++inst_it) {
                 InstructionMeta meta;
                 // Every instruction is analyzed by the specific pass and lets us know if we need to inject a function or not
-                if (!RequiresInstrumentation(function, *(inst_it->get()), meta)) {
+                if (!RequiresInstrumentation(function, current_block, inst_it, *(inst_it->get()), meta)) {
                     continue;
                 }
 

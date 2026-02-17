@@ -29,7 +29,7 @@ const uint ATOMIC_BIT = 0x40000000;
 const uint MULTI_LOAD_BIT = 0x20000000;
 const uint SENTINEL = 0x1FFFFFFF;
 
-shared uint shadow[123];
+shared uint shadow[99999];
 
 void init_shadow(const in uint length) {
     const uint wg_size = gl_WorkGroupSize.x * gl_WorkGroupSize.y * gl_WorkGroupSize.z;

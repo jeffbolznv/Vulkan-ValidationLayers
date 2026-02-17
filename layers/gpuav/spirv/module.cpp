@@ -676,7 +676,7 @@ void Module::LinkFunctions(const LinkInfo& info) {
             } else if (pointer_type->spv_type_ == SpvType::kArray &&
                        storage_class == spv::StorageClassWorkgroup &&
                        ((info.module.flags & SharedMemoryDataRaceShadow) != 0)) {
-                // XXX TODO should check for array length == 123
+                // XXX TODO should check for array length == 99999
                 id_swap_map[old_result_id] = shared_memory_shadow_variable_id_;
             } else {
                 const uint32_t new_result_id = TakeNextId();

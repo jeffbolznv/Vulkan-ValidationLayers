@@ -156,88 +156,29 @@ void RegisterSharedMemoryDataRaceValidation(Validator &gpuav, CommandBufferSubSt
 
             std::ostringstream strm;
 
-#if 0
+#if 1
             const uint32_t error_sub_code = GetSubError(error_record);
-            const uint32_t opcode = error_record[kInst_LogError_ParameterOffset_1];
 
             switch (error_sub_code) {
-                case kErrorSubCode_RayHitObject_NegativeMin: {
-                    // TODO - Figure a way to properly use GLSL floatBitsToUint and print the float values
-                    strm << string_SpvOpcode(opcode) << " operand Ray Tmin value is negative. ";
-                    out_vuid_msg = "VUID-RuntimeSpirv-OpHitObjectTraceRayEXT-11879";
+                case kErrorSubCode_SharedMemoryDataRace_RaceOnStore: {
+                    strm << "Shared memory race detected when performing store in local invocation index " <<
+                            error_record[kInst_LogError_ParameterOffset_0] << ", maybe against local invocation index " << (error_record[kInst_LogError_ParameterOffset_1] & 0xFFFF);
+                    out_vuid_msg = "VUID-RuntimeSpirv-XXX";
                 } break;
-                case kErrorSubCode_RayHitObject_NegativeMax: {
-                    strm << string_SpvOpcode(opcode) << " operand Ray Tmax value is negative. ";
-                    out_vuid_msg = "VUID-RuntimeSpirv-OpHitObjectTraceRayEXT-11879";
+                case kErrorSubCode_SharedMemoryDataRace_RaceOnLoadVsStore: {
+                    strm << "Shared memory race detected when performing load in local invocation index " << error_record[kInst_LogError_ParameterOffset_0] <<
+                            error_record[kInst_LogError_ParameterOffset_0] << ", maybe against local invocation index " << (error_record[kInst_LogError_ParameterOffset_1] & 0xFFFF);
+                    out_vuid_msg = "VUID-RuntimeSpirv-XXX";
                 } break;
-                case kErrorSubCode_RayHitObject_MinMax: {
-                    strm << string_SpvOpcode(opcode) << " operand Ray Tmax is less than RayTmin. ";
-                    out_vuid_msg = "VUID-RuntimeSpirv-OpHitObjectTraceRayEXT-11880";
+                case kErrorSubCode_SharedMemoryDataRace_RaceOnLoadVsAtomic: {
+                    strm << "Shared memory race detected when performing load in local invocation index " << error_record[kInst_LogError_ParameterOffset_0] <<
+                            error_record[kInst_LogError_ParameterOffset_0] << ", maybe against local invocation index " << (error_record[kInst_LogError_ParameterOffset_1] & 0xFFFF);
+                    out_vuid_msg = "VUID-RuntimeSpirv-XXX";
                 } break;
-                case kErrorSubCode_RayHitObject_MinNaN: {
-                    strm << string_SpvOpcode(opcode) << " operand Ray Tmin is NaN. ";
-                    out_vuid_msg = "VUID-RuntimeSpirv-OpHitObjectTraceRayEXT-11881";
-                } break;
-                case kErrorSubCode_RayHitObject_MaxNaN: {
-                    strm << string_SpvOpcode(opcode) << " operand Ray Tmax is NaN. ";
-                    out_vuid_msg = "VUID-RuntimeSpirv-OpHitObjectTraceRayEXT-11881";
-                } break;
-                case kErrorSubCode_RayHitObject_OriginNaN: {
-                    strm << string_SpvOpcode(opcode) << " operand Ray Origin contains a NaN. ";
-                    out_vuid_msg = "VUID-RuntimeSpirv-OpHitObjectTraceRayEXT-11881";
-                } break;
-                case kErrorSubCode_RayHitObject_DirectionNaN: {
-                    strm << string_SpvOpcode(opcode) << " operand Ray Direction contains a NaN. ";
-                    out_vuid_msg = "VUID-RuntimeSpirv-OpHitObjectTraceRayEXT-11881";
-                } break;
-                case kErrorSubCode_RayHitObject_OriginFinite: {
-                    strm << string_SpvOpcode(opcode) << " operand Ray Origin contains a non-finite value. ";
-                    out_vuid_msg = "VUID-RuntimeSpirv-OpHitObjectTraceRayEXT-11878";
-                } break;
-                case kErrorSubCode_RayHitObject_DirectionFinite: {
-                    strm << string_SpvOpcode(opcode) << " operand Ray Direction contains a non-finite value. ";
-                    out_vuid_msg = "VUID-RuntimeSpirv-OpHitObjectTraceRayEXT-11878";
-                } break;
-                case kErrorSubCode_RayHitObject_BothSkip: {
-                    const uint32_t value = error_record[kInst_LogError_ParameterOffset_0];
-                    strm << string_SpvOpcode(opcode) << " operand Ray Flags is 0x" << std::hex << value << ". ";
-                    out_vuid_msg = "VUID-RuntimeSpirv-OpHitObjectTraceRayEXT-11883";
-                } break;
-                case kErrorSubCode_RayHitObject_SkipCull: {
-                    const uint32_t value = error_record[kInst_LogError_ParameterOffset_0];
-                    strm << string_SpvOpcode(opcode) << " operand Ray Flags is 0x" << std::hex << value << ". ";
-                    out_vuid_msg = "VUID-RuntimeSpirv-OpHitObjectTraceRayEXT-11884";
-                } break;
-                case kErrorSubCode_RayHitObject_Opaque: {
-                    const uint32_t value = error_record[kInst_LogError_ParameterOffset_0];
-                    strm << string_SpvOpcode(opcode) << " operand Ray Flags is 0x" << std::hex << value << ". ";
-                    out_vuid_msg = "VUID-RuntimeSpirv-OpHitObjectTraceRayEXT-11885";
-                } break;
-                case kErrorSubCode_RayHitObject_SkipTrianglesWithPipelineSkipAABBs: {
-                    const uint32_t value = error_record[kInst_LogError_ParameterOffset_0];
-                    strm << string_SpvOpcode(opcode) << " operand Ray Flags (0x" << std::hex << value
-                         << ") contains SkipTrianglesKHR, but pipeline was created with "
-                            "VK_PIPELINE_CREATE_RAY_TRACING_SKIP_AABBS_BIT_KHR. ";
-                    out_vuid_msg = "VUID-RuntimeSpirv-OpHitObjectTraceRayEXT-11886";
-                } break;
-                case kErrorSubCode_RayHitObject_SkipAABBsWithPipelineSkipTriangles: {
-                    const uint32_t value = error_record[kInst_LogError_ParameterOffset_0];
-                    strm << string_SpvOpcode(opcode) << " operand Ray Flags (0x" << std::hex << value
-                         << ") contains SkipAABBsKHR, but pipeline was created with "
-                            "VK_PIPELINE_CREATE_RAY_TRACING_SKIP_TRIANGLES_BIT_KHR. ";
-                    out_vuid_msg = "VUID-RuntimeSpirv-OpHitObjectTraceRayEXT-11887";
-                } break;
-                case kErrorSubCode_RayHitObject_TimeOutOfRange: {
-                    strm << string_SpvOpcode(opcode) << " operand time is not between 0.0 and 1.0. ";
-                    out_vuid_msg = "VUID-RuntimeSpirv-OpHitObjectTraceRayEXT-11882";
-                } break;
-                case kErrorSubCode_RayHitObject_SBTIndexExceedsLimit: {
-                    // For this case, param_0 contains the SBT index and opcode_type slot contains the max SBT index
-                    const uint32_t sbt_index = error_record[kInst_LogError_ParameterOffset_0];
-                    const uint32_t max_sbt_index = error_record[kInst_LogError_ParameterOffset_1];
-                    strm << "OpHitObjectSetShaderBindingTableRecordIndexEXT SBT index (" << std::dec << sbt_index
-                         << ") exceeds VkPhysicalDeviceRayTracingInvocationReorderPropertiesEXT::maxShaderBindingTableRecordIndex (" << max_sbt_index << "). ";
-                    out_vuid_msg = "VUID-RuntimeSpirv-maxShaderBindingTableRecordIndex-11888";
+                case kErrorSubCode_SharedMemoryDataRace_RaceOnAtomic: {
+                    strm << "Shared memory race detected when performing atomic in local invocation index " << error_record[kInst_LogError_ParameterOffset_0] <<
+                            error_record[kInst_LogError_ParameterOffset_0] << ", maybe against local invocation index " << (error_record[kInst_LogError_ParameterOffset_1] & 0xFFFF);
+                    out_vuid_msg = "VUID-RuntimeSpirv-XXX";
                 } break;
                 default:
                     error_found = false;
