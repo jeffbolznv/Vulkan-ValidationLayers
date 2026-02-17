@@ -53,8 +53,9 @@ uint32_t SharedMemoryDataRacePass::CreateFunctionCall(BasicBlock& block, Instruc
     const uint32_t inst_position_id = type_manager_.CreateConstantUInt32(inst_position).Id();
 
     if (meta.function_idx == 0) {
+        const uint32_t length_id = type_manager_.CreateConstantUInt32(num_slots).Id();
         block.CreateInstruction(spv::OpFunctionCall,
-                                {void_type, function_result, function_def},
+                                {void_type, function_result, function_def, length_id},
                                 inst_it);
     } else {
         block.CreateInstruction(spv::OpFunctionCall,
@@ -151,7 +152,6 @@ bool SharedMemoryDataRacePass::Instrument() {
 
     const std::vector<const Variable*> & shmem_vars = type_manager_.GetSharedMemoryVariables();
 
-    uint32_t num_slots = 0;
     for (auto &v : shmem_vars) {
         const Type *pointee_type = v->PointerType(type_manager_);
         slot_start[v] = num_slots;
@@ -166,6 +166,7 @@ bool SharedMemoryDataRacePass::Instrument() {
     if (num_slots == 0) {
         return false;
     }
+    printf("num_slots %d\n", num_slots);
 #if 1
     auto &uint32_ty = type_manager_.GetTypeInt(32, false);
     auto &uint32_arr_ty = type_manager_.GetTypeArray(uint32_ty, type_manager_.CreateConstantUInt32(num_slots));

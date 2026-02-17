@@ -730,7 +730,14 @@ bool Type::Is64Bit() const {
 uint32_t Type::NumScalarElements(TypeManager& type_manager_) const {
     switch (spv_type_) {
     case SpvType::kArray:
-        return inst_.Word(3) * type_manager_.FindTypeById(inst_.Word(2))->NumScalarElements(type_manager_);
+        {
+            const Constant* count = type_manager_.FindConstantById(inst_.Operand(1));
+            // TODO - Need to handle spec constant here, for now return zero to have things not blowup
+            assert(count && !count->is_spec_constant_);
+            const uint32_t array_length = (count && !count->is_spec_constant_) ? count->inst_.Operand(0) : 0;
+
+            return array_length * type_manager_.FindTypeById(inst_.Word(2))->NumScalarElements(type_manager_);
+        }
     case SpvType::kVector:
         return inst_.Word(3);
     case SpvType::kInt:

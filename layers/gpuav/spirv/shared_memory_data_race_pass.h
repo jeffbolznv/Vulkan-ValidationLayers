@@ -45,7 +45,7 @@ class SharedMemoryDataRacePass : public Pass {
     // Function IDs to link in
     uint32_t link_function_id_[4] {};
     std::map<const Variable*, uint32_t> slot_start;
-
+    uint32_t num_slots {};
 };
 
 }  // namespace spirv

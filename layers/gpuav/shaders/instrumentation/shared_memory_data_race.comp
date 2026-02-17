@@ -31,9 +31,9 @@ const uint SENTINEL = 0x1FFFFFFF;
 
 shared uint shadow[123];
 
-void init_shadow() {
+void init_shadow(const in uint length) {
     const uint wg_size = gl_WorkGroupSize.x * gl_WorkGroupSize.y * gl_WorkGroupSize.z;
-    for (uint i = gl_LocalInvocationIndex; i < shadow.length(); i += wg_size) {
+    for (uint i = gl_LocalInvocationIndex; i < length; i += wg_size) {
         shadow[i] = SENTINEL;
     }
     barrier();
