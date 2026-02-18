@@ -83,3 +83,18 @@ TEST_F(NegativeGpuAVSharedMemoryDataRaceTest, TwoThreadsShareValuesThroughArray)
 
     TestHelper(shader_source, 2);
 }
+
+TEST_F(NegativeGpuAVSharedMemoryDataRaceTest, TwoDimensionalArray) {
+    const char *shader_source = R"glsl(
+        #version 450
+
+        layout(local_size_x = 3) in;
+        shared uint temp[3][2];
+        void main() {
+            temp[gl_LocalInvocationIndex][1] = 0;
+            uint x = temp[(gl_LocalInvocationIndex + 1) % 3][1];
+        }
+    )glsl";
+
+    TestHelper(shader_source, 3);
+}

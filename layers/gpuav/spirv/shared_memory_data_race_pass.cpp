@@ -96,10 +96,12 @@ bool SharedMemoryDataRacePass::RequiresInstrumentation(const Function& function,
     if (opcode != spv::OpControlBarrier) {
         uint32_t ptr_id = opcode == spv::OpStore ? inst.Word(1) : inst.Word(3);
 
+        std::vector<const Instruction*> access_chains;
         const Variable* variable = type_manager_.FindVariableById(ptr_id);
         const Instruction* access_chain_inst = function.FindInstruction(ptr_id);
         // We need to walk down possibly multiple chained OpAccessChains or OpCopyObject to get the variable
         while (access_chain_inst && access_chain_inst->IsNonPtrAccessChain()) {
+            access_chains.insert(access_chains.begin(), access_chain_inst);
             const uint32_t access_chain_base_id = access_chain_inst->Operand(0);
             variable = type_manager_.FindVariableById(access_chain_base_id);
             if (variable) {
@@ -116,20 +118,47 @@ bool SharedMemoryDataRacePass::RequiresInstrumentation(const Function& function,
             return false;
         }
 
-        // XXX TODO handle multidim array, struct, etc.
-        const Type* pointer_type = variable->PointerType(type_manager_);
-        if (pointer_type->IsArray()) {
-            // XXX TODO handle non-32b
-            // Bitcast i32 to u32
-            const uint32_t new_id = module_.TakeNextId();
-            const Type& uint32_type = type_manager_.GetTypeInt(32, false);
-            block.CreateInstruction(spv::OpBitcast, {uint32_type.Id(), new_id, access_chain_inst->Operand(1)}, &inst_it);
-            meta.access_chain_idx_id = new_id;
-        } else {
-            // There is no array of this descriptor, so we essentially have an array of 1
-            meta.access_chain_idx_id = type_manager_.GetConstantZeroUint32().Id();
+        const Type& uint32_type = type_manager_.GetTypeInt(32, false);
+        uint32_t offset_id = type_manager_.GetConstantUInt32(slot_start[variable]).Id();
+
+        for (auto ac : access_chains) {
+            auto ptr = function.FindInstruction(ac->Word(3));
+            const Type* base_ptr_type = type_manager_.FindTypeById(ptr->Word(1));
+
+            const Type *ptr_elem_type = type_manager_.FindChildType(*base_ptr_type, 0);
+
+            for (uint32_t i = 4; i < access_chain_inst->Length(); ++i) {
+                uint32_t idx_id = access_chain_inst->Word(i);
+                switch (ptr_elem_type->spv_type_) {
+                case SpvType::kStruct:
+                    {
+                        auto idx_c = type_manager_.FindConstantById(idx_id);
+                        uint32_t idx_u32 = idx_c->GetValueUint32();
+                        uint32_t off = type_manager_.GetNumScalarElementsBeforeCompositeMember(*ptr_elem_type, idx_u32);
+                        uint32_t new_id = module_.TakeNextId();
+                        block.CreateInstruction(spv::OpIAdd, {uint32_type.Id(), new_id, offset_id, type_manager_.GetConstantUInt32(off).Id()}, &inst_it);
+                        offset_id = new_id;
+                        ptr_elem_type = type_manager_.FindChildType(*ptr_elem_type, idx_u32);
+                    }
+                    break;
+                default:
+                    {
+                        uint32_t stride = type_manager_.GetNumScalarElementsBeforeCompositeMember(*ptr_elem_type, 1);
+
+                        uint32_t stride_times_idx_id = module_.TakeNextId();
+                        block.CreateInstruction(spv::OpIMul, {uint32_type.Id(), stride_times_idx_id, idx_id, type_manager_.GetConstantUInt32(stride).Id()}, &inst_it);
+
+                        uint32_t new_id = module_.TakeNextId();
+                        block.CreateInstruction(spv::OpIAdd, {uint32_type.Id(), new_id, offset_id, stride_times_idx_id}, &inst_it);
+                        offset_id = new_id;
+                        ptr_elem_type = type_manager_.FindChildType(*ptr_elem_type, 0);
+                    }
+                    break;
+                }
+            }
         }
 
+        meta.access_chain_idx_id = offset_id;
         meta.start_id = type_manager_.GetConstantUInt32(slot_start[variable]).Id();
     }
 
@@ -160,7 +189,7 @@ bool SharedMemoryDataRacePass::Instrument() {
     for (auto &v : shmem_vars) {
         const Type *pointee_type = v->PointerType(type_manager_);
         slot_start[v] = num_slots;
-        uint32_t num_scalar_elements = pointee_type->NumScalarElements(type_manager_);
+        uint32_t num_scalar_elements = type_manager_.NumScalarElements(*pointee_type);
         if (num_scalar_elements == 0) {
             // XXX not yet supported
             return false;

@@ -67,8 +67,6 @@ struct Type {
     // 64-bit floats/int take up 2 dwords
     bool Is64Bit() const;
 
-    uint32_t NumScalarElements(TypeManager& type_manager_) const;
-
     const SpvType spv_type_;
     const Instruction& inst_;
 };
@@ -166,6 +164,11 @@ class TypeManager {
     const Variable* FindVariableById(uint32_t id) const;
     const Variable* FindPushConstantVariable() const;
     const std::vector<const Variable*> &GetSharedMemoryVariables() const { return shared_memory_variables_; }
+
+    const Type *FindChildType(const Type& type, uint32_t idx) const;
+
+    uint32_t NumScalarElements(const Type& type) const;
+    uint32_t GetNumScalarElementsBeforeCompositeMember(const Type& type, uint32_t idx) const;
 
     void AddUndef(std::unique_ptr<Instruction> new_inst);
     bool IsUndef(uint32_t id) const;
