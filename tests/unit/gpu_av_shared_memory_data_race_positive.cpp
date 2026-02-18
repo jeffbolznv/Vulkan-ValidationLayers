@@ -60,7 +60,7 @@ TEST_F(PositiveGpuAVSharedMemoryDataRaceTest, SingleScalar) {
     TestHelper(shader_source);
 }
 
-TEST_F(PositiveGpuAVSharedMemoryDataRaceTest, SingleElementArray) {
+TEST_F(PositiveGpuAVSharedMemoryDataRaceTest, SingleElementAccess) {
     const char *shader_source = R"glsl(
         #version 450
 
@@ -68,6 +68,22 @@ TEST_F(PositiveGpuAVSharedMemoryDataRaceTest, SingleElementArray) {
         shared uint temp[2];
         void main() {
             temp[gl_LocalInvocationIndex] = 0;
+        }
+    )glsl";
+
+    TestHelper(shader_source);
+}
+
+TEST_F(PositiveGpuAVSharedMemoryDataRaceTest, TwoThreadsShareValuesThroughArray) {
+    const char *shader_source = R"glsl(
+        #version 450
+
+        layout(local_size_x = 2) in;
+        shared uint temp[2];
+        void main() {
+            temp[gl_LocalInvocationIndex] = 0;
+            barrier();
+            uint x = temp[gl_LocalInvocationIndex ^ 1];
         }
     )glsl";
 

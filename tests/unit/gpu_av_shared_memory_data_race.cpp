@@ -18,10 +18,10 @@
 
 class NegativeGpuAVSharedMemoryDataRaceTest : public GpuAVSharedMemoryDataRaceTest {
 protected:
-    void TestHelper(const char *source);
+    void TestHelper(const char *source, uint32_t count);
 };
 
-void NegativeGpuAVSharedMemoryDataRaceTest::TestHelper(const char *shader_source) {
+void NegativeGpuAVSharedMemoryDataRaceTest::TestHelper(const char *shader_source, uint32_t count) {
     TEST_DESCRIPTION("Shared memory, data race");
     RETURN_IF_SKIP(InitSharedMemoryDataRace());
 
@@ -34,7 +34,7 @@ void NegativeGpuAVSharedMemoryDataRaceTest::TestHelper(const char *shader_source
     vk::CmdDispatch(m_command_buffer, 1, 1, 1);
     m_command_buffer.End();
 
-    m_errorMonitor->SetDesiredError("VUID-RuntimeSpirv-XXX");
+    m_errorMonitor->SetDesiredError("VUID-RuntimeSpirv-XXX", count);
     m_default_queue->SubmitAndWait(m_command_buffer);
     m_errorMonitor->VerifyFound();
 
@@ -51,7 +51,7 @@ TEST_F(NegativeGpuAVSharedMemoryDataRaceTest, SingleScalar) {
         }
     )glsl";
 
-    TestHelper(shader_source);
+    TestHelper(shader_source, 1);
 }
 
 TEST_F(NegativeGpuAVSharedMemoryDataRaceTest, SingleElementArray) {
@@ -65,5 +65,21 @@ TEST_F(NegativeGpuAVSharedMemoryDataRaceTest, SingleElementArray) {
         }
     )glsl";
 
-    TestHelper(shader_source);
+    TestHelper(shader_source, 1);
+}
+
+
+TEST_F(NegativeGpuAVSharedMemoryDataRaceTest, TwoThreadsShareValuesThroughArray) {
+    const char *shader_source = R"glsl(
+        #version 450
+
+        layout(local_size_x = 2) in;
+        shared uint temp[2];
+        void main() {
+            temp[gl_LocalInvocationIndex] = 0;
+            uint x = temp[gl_LocalInvocationIndex ^ 1];
+        }
+    )glsl";
+
+    TestHelper(shader_source, 2);
 }
