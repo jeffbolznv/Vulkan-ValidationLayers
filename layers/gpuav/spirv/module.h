@@ -88,6 +88,8 @@ class Module {
     void AddDecoration(uint32_t target_id, spv::Decoration decoration, const std::vector<uint32_t>& operands);
     void AddMemberDecoration(uint32_t target_id, uint32_t index, spv::Decoration decoration, const std::vector<uint32_t>& operands);
 
+    const Variable& GetBuiltInVariable(uint32_t built_in);
+
     // Global settings we would know at vkCreateDevice
     const DeviceSettings& settings_;
     // Per-pipeline/shaderObject information
