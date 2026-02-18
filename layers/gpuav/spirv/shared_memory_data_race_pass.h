@@ -35,6 +35,7 @@ class SharedMemoryDataRacePass : public Pass {
         uint32_t function_idx;
         uint32_t access_chain_idx_id;
         uint32_t start_id;
+        uint32_t num_elements;
     };
 
     bool RequiresInstrumentation(const Function& function, BasicBlock &block, InstructionIt& inst_it, const Instruction& inst, InstructionMeta& meta);

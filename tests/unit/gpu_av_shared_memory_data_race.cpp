@@ -122,3 +122,107 @@ TEST_F(NegativeGpuAVSharedMemoryDataRaceTest, BasicStructRace) {
 
     TestHelper(shader_source, 2);
 }
+
+TEST_F(NegativeGpuAVSharedMemoryDataRaceTest, StructVsScalarRace) {
+    const char *shader_source = R"glsl(
+        #version 450
+
+        layout(local_size_x = 2) in;
+        struct S { uint a, b; };
+        shared S temp;
+        void main() {
+            if (gl_LocalInvocationIndex == 0) {
+                S t2;
+                temp = t2;
+            }
+            if (gl_LocalInvocationIndex == 1) {
+                uint b = temp.b;
+            }
+        }
+    )glsl";
+
+    TestHelper(shader_source, 1);
+}
+
+TEST_F(NegativeGpuAVSharedMemoryDataRaceTest, VectorVsScalarRace) {
+    const char *shader_source = R"glsl(
+        #version 450
+
+        layout(local_size_x = 2) in;
+        shared uvec4 temp;
+        void main() {
+            if (gl_LocalInvocationIndex == 0) {
+                temp = uvec4(0);
+            }
+            if (gl_LocalInvocationIndex == 1) {
+                uint b = temp.z;
+            }
+        }
+    )glsl";
+
+    TestHelper(shader_source, 1);
+}
+
+TEST_F(NegativeGpuAVSharedMemoryDataRaceTest, TwoVariablesRace) {
+    const char *shader_source = R"glsl(
+        #version 450
+
+        layout(local_size_x = 2) in;
+        shared uint a, b;
+        void main() {
+            if (gl_LocalInvocationIndex == 0) {
+                a = 0;
+            } else {
+                b = 0;
+            }
+            if (gl_LocalInvocationIndex == 1) {
+                a = 0;
+            } else {
+                b = 0;
+            }
+        }
+    )glsl";
+
+    TestHelper(shader_source, 2);
+}
+
+TEST_F(NegativeGpuAVSharedMemoryDataRaceTest, TwoVectorsRace) {
+    const char *shader_source = R"glsl(
+        #version 450
+
+        layout(local_size_x = 2) in;
+        shared uvec4 a, b;
+        void main() {
+            if (gl_LocalInvocationIndex == 0) {
+                a = uvec4(0);
+            } else {
+                b = uvec4(0);
+            }
+            if (gl_LocalInvocationIndex == 1) {
+                a = uvec4(0);
+            } else {
+                b = uvec4(0);
+            }
+        }
+    )glsl";
+
+    TestHelper(shader_source, 2);
+}
+
+TEST_F(NegativeGpuAVSharedMemoryDataRaceTest, VectorArrayRace) {
+    const char *shader_source = R"glsl(
+        #version 450
+
+        layout(local_size_x = 4) in;
+        shared uvec4 arr[4];
+        void main() {
+            arr[gl_LocalInvocationIndex] = uvec4(gl_LocalInvocationIndex);
+            uvec4 sum;
+            for (uint i = 0; i < 4; ++i) {
+                sum += arr[i];
+            }
+        }
+    )glsl";
+
+    TestHelper(shader_source, 4);
+}

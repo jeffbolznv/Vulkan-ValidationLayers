@@ -57,9 +57,12 @@ uint32_t SharedMemoryDataRacePass::CreateFunctionCall(BasicBlock& block, Instruc
                                 {void_type, function_result, function_def, length_id},
                                 inst_it);
     } else {
-        block.CreateInstruction(spv::OpFunctionCall,
-                                {void_type, function_result, function_def, meta.start_id, meta.access_chain_idx_id, inst_position_id},
-                                inst_it);
+        for (uint32_t i = 0; i < meta.num_elements; ++i) {
+            uint32_t start = type_manager_.GetConstantUInt32(meta.start_id + i).Id();
+            block.CreateInstruction(spv::OpFunctionCall,
+                                    {void_type, function_result, function_def, start, meta.access_chain_idx_id, inst_position_id},
+                                    inst_it);
+        }
     }
     module_.need_log_error_ = true;
     return function_result;
@@ -118,13 +121,16 @@ bool SharedMemoryDataRacePass::RequiresInstrumentation(const Function& function,
         }
 
         const Type& uint32_type = type_manager_.GetTypeInt(32, false);
-        uint32_t offset_id = type_manager_.GetConstantUInt32(slot_start[variable]).Id();
+        uint32_t offset_id = type_manager_.GetConstantUInt32(0).Id();
 
+        // ptr_elem_type will point to the portion of the variable being accessed. Initialize it
+        // to the variable's pointee type in case of no access chains.
+        const Type *ptr_elem_type = type_manager_.FindChildType(*type_manager_.FindTypeById(variable->inst_.Word(1)), 0);
         for (auto ac : access_chains) {
             auto ptr = function.FindInstruction(ac->Word(3));
             const Type* base_ptr_type = type_manager_.FindTypeById(ptr->Word(1));
 
-            const Type *ptr_elem_type = type_manager_.FindChildType(*base_ptr_type, 0);
+            ptr_elem_type = type_manager_.FindChildType(*base_ptr_type, 0);
 
             for (uint32_t i = 4; i < access_chain_inst->Length(); ++i) {
                 uint32_t idx_id = access_chain_inst->Word(i);
@@ -160,7 +166,8 @@ bool SharedMemoryDataRacePass::RequiresInstrumentation(const Function& function,
         }
 
         meta.access_chain_idx_id = offset_id;
-        meta.start_id = type_manager_.GetConstantUInt32(slot_start[variable]).Id();
+        meta.start_id = slot_start[variable];
+        meta.num_elements = type_manager_.NumScalarElements(*ptr_elem_type);
     }
 
     if (opcode == spv::OpControlBarrier) {
