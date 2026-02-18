@@ -134,7 +134,14 @@ bool SharedMemoryDataRacePass::RequiresInstrumentation(const Function& function,
 
             for (uint32_t i = 4; i < access_chain_inst->Length(); ++i) {
                 uint32_t idx_id = access_chain_inst->Word(i);
-                // XXX TODO handle non-32b index
+                auto idx_inst = function.FindInstruction(idx_id);
+                auto idx_type = type_manager_.FindTypeById(idx_inst->Word(1));
+                assert(idx_type->inst_.Opcode() == spv::OpTypeInt);
+                if (idx_type->inst_.Word(2) != 32) {
+                    uint32_t new_id = module_.TakeNextId();
+                    block.CreateInstruction(spv::OpUConvert, {uint32_type.Id(), new_id, idx_id}, &inst_it);
+                    idx_id = new_id;
+                }
 
                 switch (ptr_elem_type->spv_type_) {
                 case SpvType::kStruct:

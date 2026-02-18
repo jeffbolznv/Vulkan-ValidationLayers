@@ -226,3 +226,24 @@ TEST_F(NegativeGpuAVSharedMemoryDataRaceTest, VectorArrayRace) {
 
     TestHelper(shader_source, 4);
 }
+
+TEST_F(NegativeGpuAVSharedMemoryDataRaceTest, ShortIndex) {
+    AddRequiredFeature(vkt::Feature::shaderInt16);
+
+    const char *shader_source = R"glsl(
+        #version 450
+        #extension GL_EXT_shader_explicit_arithmetic_types_int16: enable
+
+        layout(local_size_x = 4) in;
+        shared uvec4 arr[4];
+        void main() {
+            arr[gl_LocalInvocationIndex] = uvec4(gl_LocalInvocationIndex);
+            uvec4 sum;
+            for (int16_t i = int16_t(0); i < 4; ++i) {
+                sum += arr[i];
+            }
+        }
+    )glsl";
+
+    TestHelper(shader_source, 4);
+}
