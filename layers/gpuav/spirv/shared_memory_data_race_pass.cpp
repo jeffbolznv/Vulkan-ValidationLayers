@@ -20,6 +20,7 @@
 #include <iostream>
 
 #include "generated/gpuav_offline_spirv.h"
+#include "state_tracker/shader_module.h"
 
 namespace gpuav {
 namespace spirv {
@@ -35,7 +36,13 @@ const static OfflineFunction kOfflineFunction[4] =
     {"do_atomic",   instrumentation_shared_memory_data_race_comp_function_3_offset},
 };
 
-SharedMemoryDataRacePass::SharedMemoryDataRacePass(Module& module) : Pass(module, kOfflineModule) { module.use_bda_ = true; }
+SharedMemoryDataRacePass::SharedMemoryDataRacePass(Module& module, const vvl::span<const uint32_t>& input_spirv,
+                                                   const VkPhysicalDeviceProperties& phys_dev_props)
+                                                   : Pass(module, kOfflineModule)
+                                                   , input_spirv(input_spirv)
+                                                   , phys_dev_props(phys_dev_props) {
+    module.use_bda_ = true;
+}
 
 uint32_t SharedMemoryDataRacePass::GetLinkFunctionId(const InstructionMeta& meta) { return GetLinkFunction(link_function_id_[meta.function_idx], kOfflineFunction[meta.function_idx]); }
 
@@ -222,8 +229,14 @@ bool SharedMemoryDataRacePass::Instrument() {
     if (num_slots == 0) {
         return false;
     }
-    //printf("num_slots %d\n", num_slots);
-#if 1
+
+    // Hackily create a ::spirv::Module to compute the shared memory size.
+    ::spirv::Module m(input_spirv);
+    const uint32_t shared_memory_size = m.CalculateWorkgroupSharedMemory();
+    if (shared_memory_size + num_slots * sizeof(uint32_t) > phys_dev_props.limits.maxComputeSharedMemorySize) {
+        return false;
+    }
+
     auto &uint32_ty = type_manager_.GetTypeInt(32, false);
     auto &uint32_arr_ty = type_manager_.GetTypeArray(uint32_ty, type_manager_.CreateConstantUInt32(num_slots));
     auto &uint32_arr_ptr_ty = type_manager_.GetTypePointer(spv::StorageClassWorkgroup, uint32_arr_ty);
@@ -233,7 +246,6 @@ bool SharedMemoryDataRacePass::Instrument() {
     auto shadow_var = std::make_unique<Instruction>(4, spv::OpVariable);
     shadow_var->Fill({uint32_arr_ptr_ty.Id(), module_.shared_memory_shadow_variable_id_, spv::StorageClassWorkgroup});
     type_manager_.AddVariable(std::move(shadow_var), uint32_arr_ptr_ty);
-#endif
 
     // Can safely loop function list as there is no injecting of new Functions until linking time
     for (Function& function : module_.functions_) {

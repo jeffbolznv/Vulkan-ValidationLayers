@@ -1658,7 +1658,7 @@ bool GpuShaderInstrumentor::InstrumentShader(const vvl::span<const uint32_t>& in
     }
 
     if (gpuav_settings.shader_instrumentation.shared_memory_data_race) {
-        spirv::SharedMemoryDataRacePass pass(module);
+        spirv::SharedMemoryDataRacePass pass(module, input_spirv, phys_dev_props);
         modified |= pass.Run();
     }
 

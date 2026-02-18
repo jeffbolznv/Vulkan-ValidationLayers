@@ -14,6 +14,7 @@
  */
 #pragma once
 
+#include <vulkan/vulkan.h>
 #include <stdint.h>
 #include "pass.h"
 #include <map>
@@ -23,7 +24,7 @@ namespace spirv {
 
 class SharedMemoryDataRacePass : public Pass {
   public:
-    SharedMemoryDataRacePass(Module& module);
+    SharedMemoryDataRacePass(Module& module, const vvl::span<const uint32_t>& input_spirv, const VkPhysicalDeviceProperties& phys_dev_props);
     const char* Name() const final { return "SharedMemoryDataRacePass"; }
     bool Instrument() final;
     void PrintDebugInfo() const final;
@@ -47,6 +48,8 @@ class SharedMemoryDataRacePass : public Pass {
     uint32_t link_function_id_[4] {};
     std::map<const Variable*, uint32_t> slot_start;
     uint32_t num_slots {};
+    const vvl::span<const uint32_t>& input_spirv;
+    const VkPhysicalDeviceProperties& phys_dev_props;
 };
 
 }  // namespace spirv
