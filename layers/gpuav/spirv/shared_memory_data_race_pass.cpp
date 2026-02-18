@@ -48,7 +48,6 @@ uint32_t SharedMemoryDataRacePass::CreateFunctionCall(BasicBlock& block, Instruc
     const uint32_t function_def = GetLinkFunctionId(meta);
     const uint32_t void_type = type_manager_.GetTypeVoid().Id();
 
-    // XXX TODO can this be a source line number?
     const uint32_t inst_position = meta.target_instruction->GetPositionOffset();
     const uint32_t inst_position_id = type_manager_.CreateConstantUInt32(inst_position).Id();
 
@@ -129,6 +128,8 @@ bool SharedMemoryDataRacePass::RequiresInstrumentation(const Function& function,
 
             for (uint32_t i = 4; i < access_chain_inst->Length(); ++i) {
                 uint32_t idx_id = access_chain_inst->Word(i);
+                // XXX TODO handle non-32b index
+
                 switch (ptr_elem_type->spv_type_) {
                 case SpvType::kStruct:
                     {
@@ -162,7 +163,17 @@ bool SharedMemoryDataRacePass::RequiresInstrumentation(const Function& function,
         meta.start_id = type_manager_.GetConstantUInt32(slot_start[variable]).Id();
     }
 
-    // XXX TODO check controlbarrier scope/semantics
+    if (opcode == spv::OpControlBarrier) {
+        // Must be scope=Workgroup, semantics=AcquireRelease
+        const uint32_t scope_id = inst.Word(1);
+        const uint32_t semantics_id = inst.Word(3);
+        uint32_t scope = type_manager_.FindConstantById(scope_id)->GetValueUint32();
+        uint32_t semantics = type_manager_.FindConstantById(semantics_id)->GetValueUint32();
+        if (scope != spv::ScopeWorkgroup ||
+            (semantics & spv::MemorySemanticsAcquireReleaseMask) == 0) {
+            return false;
+        }
+    }
 
     switch (opcode) {
     case spv::OpLoad:
@@ -190,10 +201,7 @@ bool SharedMemoryDataRacePass::Instrument() {
         const Type *pointee_type = v->PointerType(type_manager_);
         slot_start[v] = num_slots;
         uint32_t num_scalar_elements = type_manager_.NumScalarElements(*pointee_type);
-        if (num_scalar_elements == 0) {
-            // XXX not yet supported
-            return false;
-        }
+        assert(num_scalar_elements != 0);
         num_slots += num_scalar_elements;
     }
 

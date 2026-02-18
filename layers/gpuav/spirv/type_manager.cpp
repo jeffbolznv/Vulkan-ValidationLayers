@@ -730,6 +730,8 @@ bool Type::Is64Bit() const {
 
 uint32_t TypeManager::NumScalarElements(const Type& type) const {
     switch (type.spv_type_) {
+    case SpvType::kStruct:
+        return GetNumScalarElementsBeforeCompositeMember(type, type.inst_.Length() - 2);
     case SpvType::kArray:
         {
             const Constant* count = FindConstantById(type.inst_.Operand(1));
@@ -746,7 +748,6 @@ uint32_t TypeManager::NumScalarElements(const Type& type) const {
     case SpvType::kBool:
         return 1;
     }
-    // XXX TODO handle all types
     assert(0);
     return 0;
 }
