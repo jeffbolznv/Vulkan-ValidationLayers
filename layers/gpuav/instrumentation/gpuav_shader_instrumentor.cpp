@@ -461,7 +461,6 @@ void GpuShaderInstrumentor::PreCallRecordGetShaderBinaryDataEXT(VkDevice device,
 bool GpuShaderInstrumentor::PreCallRecordShaderObjectInstrumentation(
     vku::safe_VkShaderCreateInfoEXT &modified_create_info, const Location &create_info_loc,
     chassis::ShaderObjectInstrumentationData &instrumentation_data) {
-printf("file %s line %d\n", __FILE__, __LINE__);
     if (gpuav_settings.select_instrumented_shaders && !IsSelectiveInstrumentationEnabled(modified_create_info.pNext)) {
         return false;
     }
@@ -673,9 +672,7 @@ void GpuShaderInstrumentor::PreCallRecordCreateComputePipelines(VkDevice device,
                                                                 const VkAllocationCallbacks *pAllocator, VkPipeline *pPipelines,
                                                                 const RecordObject &record_obj, PipelineStates &pipeline_states,
                                                                 chassis::CreateComputePipelines &chassis_state) {
-printf("file %s line %d\n", __FILE__, __LINE__);
     if (!gpuav_settings.IsSpirvModified()) return;
-printf("file %s line %d\n", __FILE__, __LINE__);
 
     chassis_state.shader_instrumentations_metadata.resize(count);
     chassis_state.modified_create_infos.resize(count);
@@ -1216,7 +1213,6 @@ bool GpuShaderInstrumentor::PreCallRecordPipelineCreationShaderInstrumentation(
     // Init here instead of in chassis so we don't pay cost when GPU-AV is not used
     shader_instrumentation_metadata.resize(stages_count);
 
-printf("file %s line %d\n", __FILE__, __LINE__);
     spirv::InstrumentationInterface interface(loc);
     // Can set this once for all shaders in the pipeline
     BuildDescriptorSetLayoutInfo(pipeline_state, interface.instrumentation_dsl);
@@ -1446,7 +1442,7 @@ bool GpuShaderInstrumentor::PreCallRecordPipelineCreationShaderInstrumentationGP
             // ---
             std::vector<uint32_t> instrumented_spirv;
             const uint32_t unique_shader_id = unique_shader_module_id_++;
-printf("file %s line %d\n", __FILE__, __LINE__);
+
             interface.unique_shader_id = unique_shader_id;
             interface.entry_point_name = modified_stage_state.GetPName();
             interface.entry_point_stage = modified_stage_state.GetStage();
@@ -1599,7 +1595,6 @@ static bool GpuValidateShader(const std::vector<uint32_t> &input, spv_target_env
 bool GpuShaderInstrumentor::InstrumentShader(const vvl::span<const uint32_t>& input_spirv,
                                              const spirv::InstrumentationInterface& interface,
                                              std::vector<uint32_t>& out_instrumented_spirv) {
-    printf("file %s line %d\n", __FILE__, __LINE__);
     if (input_spirv[0] != spv::MagicNumber) {
         return false;
     }
@@ -1661,7 +1656,7 @@ bool GpuShaderInstrumentor::InstrumentShader(const vvl::span<const uint32_t>& in
         spirv::RayHitObjectPass pass(module);
         modified |= pass.Run();
     }
-printf("gpuav_settings.shader_instrumentation.shared_memory_data_race %d\n", gpuav_settings.shader_instrumentation.shared_memory_data_race);
+
     if (gpuav_settings.shader_instrumentation.shared_memory_data_race) {
         spirv::SharedMemoryDataRacePass pass(module);
         modified |= pass.Run();

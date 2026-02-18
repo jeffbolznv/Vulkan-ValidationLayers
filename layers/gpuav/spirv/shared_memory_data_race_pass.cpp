@@ -93,10 +93,10 @@ bool SharedMemoryDataRacePass::RequiresInstrumentation(const Function& function,
     }
     meta.target_instruction = &inst;
 
-    if (opcode == spv::OpLoad || opcode == spv::OpStore) {
+    if (opcode != spv::OpControlBarrier) {
         uint32_t ptr_id = opcode == spv::OpStore ? inst.Word(1) : inst.Word(3);
 
-        const Variable* variable = nullptr;
+        const Variable* variable = type_manager_.FindVariableById(ptr_id);
         const Instruction* access_chain_inst = function.FindInstruction(ptr_id);
         // We need to walk down possibly multiple chained OpAccessChains or OpCopyObject to get the variable
         while (access_chain_inst && access_chain_inst->IsNonPtrAccessChain()) {
@@ -171,7 +171,7 @@ bool SharedMemoryDataRacePass::Instrument() {
     if (num_slots == 0) {
         return false;
     }
-    printf("num_slots %d\n", num_slots);
+    //printf("num_slots %d\n", num_slots);
 #if 1
     auto &uint32_ty = type_manager_.GetTypeInt(32, false);
     auto &uint32_arr_ty = type_manager_.GetTypeArray(uint32_ty, type_manager_.CreateConstantUInt32(num_slots));
@@ -215,6 +215,7 @@ bool SharedMemoryDataRacePass::Instrument() {
                 meta.function_idx = 0;
 
                 CreateFunctionCall(current_block, &inst_it, meta);
+                instrumentations_count_++;
             }
 
             for (auto inst_it = block_instructions.begin(); inst_it != block_instructions.end(); ++inst_it) {

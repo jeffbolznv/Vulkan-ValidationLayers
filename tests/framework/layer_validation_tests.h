@@ -290,6 +290,11 @@ class GpuAVRayHitObjectTest : public GpuAVTest {
     void InitHitObjectTest(std::vector<VkLayerSettingEXT> layer_settings = {});
 };
 
+class GpuAVSharedMemoryDataRaceTest : public GpuAVTest {
+  public:
+    void InitSharedMemoryDataRace();
+};
+
 class DebugPrintfTests : public VkLayerTest {
   public:
     void InitDebugPrintfFramework(void *p_next = nullptr, bool reserve_slot = false);
