@@ -69,8 +69,35 @@ void SharedMemoryDataRacePass::CreateFunctionCall(BasicBlock& block, Instruction
             }
         }
 
+        // if there's no WorkgroupSize constant, create a constant from localsize
         if (!wg_size_id) {
-            wg_size_id = module_.GetBuiltInVariable(spv::BuiltInWorkgroupSize).Id();
+            const Type& uint_32_type = type_manager_.GetTypeInt(32, 0);
+            const Type& uvec3_type = type_manager_.GetTypeVector(uint_32_type, 3);
+            uint32_t local_x = 1;
+            uint32_t local_y = 1;
+            uint32_t local_z = 1;
+
+            for (const auto& execution_mode_inst : module_.execution_modes_) {
+                if (execution_mode_inst->Word(1) != module_.target_entry_point_id_) {
+                    continue;
+                }
+
+                const spv::ExecutionMode mode = (spv::ExecutionMode)execution_mode_inst->Word(2);
+                if (mode == spv::ExecutionModeLocalSize) {
+                    local_x = execution_mode_inst->Word(3);
+                    local_y = execution_mode_inst->Word(4);
+                    local_z = execution_mode_inst->Word(5);
+                }
+            }
+
+            const uint32_t local_x_id = type_manager_.CreateConstantUInt32(local_x).Id();
+            const uint32_t local_y_id = type_manager_.CreateConstantUInt32(local_y).Id();
+            const uint32_t local_z_id = type_manager_.CreateConstantUInt32(local_z).Id();
+
+            wg_size_id = module_.TakeNextId();
+            auto new_inst = std::make_unique<Instruction>(6, spv::OpConstantComposite);
+            new_inst->Fill({uvec3_type.Id(), wg_size_id, local_x_id, local_y_id, local_z_id});
+            type_manager_.AddConstant(std::move(new_inst), uvec3_type);
         }
 
         const uint32_t function_result = module_.TakeNextId();

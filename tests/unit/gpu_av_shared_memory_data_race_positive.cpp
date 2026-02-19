@@ -18,7 +18,7 @@
 #include "generated/vk_function_pointers.h"
 
 void GpuAVSharedMemoryDataRaceTest::InitSharedMemoryDataRace() {
-    SetTargetApiVersion(VK_API_VERSION_1_2);
+    SetTargetApiVersion(VK_API_VERSION_1_3);
 
     RETURN_IF_SKIP(InitGpuAvFramework({}, false));
     RETURN_IF_SKIP(InitState());
@@ -27,6 +27,8 @@ void GpuAVSharedMemoryDataRaceTest::InitSharedMemoryDataRace() {
 class PositiveGpuAVSharedMemoryDataRaceTest : public GpuAVSharedMemoryDataRaceTest {
 protected:
     void TestHelper(const char *source);
+
+    spv_target_env env { SPV_ENV_VULKAN_1_2 };
 };
 
 void PositiveGpuAVSharedMemoryDataRaceTest::TestHelper(const char *shader_source) {
@@ -34,7 +36,7 @@ void PositiveGpuAVSharedMemoryDataRaceTest::TestHelper(const char *shader_source
     RETURN_IF_SKIP(InitSharedMemoryDataRace());
 
     CreateComputePipelineHelper pipe(*this);
-    pipe.cs_ = VkShaderObj(*m_device, shader_source, VK_SHADER_STAGE_COMPUTE_BIT);
+    pipe.cs_ = VkShaderObj(*m_device, shader_source, VK_SHADER_STAGE_COMPUTE_BIT, env);
     pipe.CreateComputePipeline();
 
     m_command_buffer.Begin();
@@ -288,3 +290,32 @@ TEST_F(PositiveGpuAVSharedMemoryDataRaceTest, SpecConstantArrayBarrier) {
     TestHelper(shader_source);
 }
 
+TEST_F(PositiveGpuAVSharedMemoryDataRaceTest, NoLocalSize) {
+    const char *shader_source = R"glsl(
+        #version 450
+        #extension GL_KHR_memory_scope_semantics : enable
+
+        shared uint temp;
+        void main() {
+            temp = 0u;
+        }
+    )glsl";
+
+    TestHelper(shader_source);
+}
+
+TEST_F(PositiveGpuAVSharedMemoryDataRaceTest, SpvEnvVulkan1_3) {
+    env = SPV_ENV_VULKAN_1_3;
+    const char *shader_source = R"glsl(
+        #version 450
+        #extension GL_KHR_memory_scope_semantics : enable
+
+        layout(local_size_x = 2) in;
+        shared uint temp;
+        void main() {
+            atomicStore(temp, 0u, gl_ScopeWorkgroup, 0, 0);
+        }
+    )glsl";
+
+    TestHelper(shader_source);
+}

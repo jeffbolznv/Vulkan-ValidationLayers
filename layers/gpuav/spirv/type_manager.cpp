@@ -394,6 +394,7 @@ const Type& TypeManager::GetTypePointerBuiltInInput(spv::BuiltIn built_in) {
             const Type& uint_32 = GetTypeInt(32, false);
             return GetTypePointer(spv::StorageClassInput, uint_32);
         }
+        case spv::BuiltInWorkgroupSize:
         case spv::BuiltInGlobalInvocationId:
         case spv::BuiltInLaunchIdKHR: {
             const Type& uint_32 = GetTypeInt(32, false);
