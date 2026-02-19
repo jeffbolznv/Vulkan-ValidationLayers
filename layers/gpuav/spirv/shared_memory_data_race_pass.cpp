@@ -57,10 +57,25 @@ void SharedMemoryDataRacePass::CreateFunctionCall(BasicBlock& block, Instruction
     const uint32_t inst_position_id = type_manager_.CreateConstantUInt32(inst_position).Id();
 
     if (meta.function_idx == 0) {
+
+        // workgroupsize can be a constant, so GetBuiltInVariable may insert a duplicate
+        uint32_t wg_size_id = 0;
+        for (const auto& annotation : module_.annotations_) {
+            if (annotation->Opcode() == spv::OpDecorate && annotation->Word(2) == spv::DecorationBuiltIn &&
+                annotation->Word(3) == spv::BuiltInWorkgroupSize) {
+                wg_size_id = annotation->Word(1);
+                break;
+            }
+        }
+
+        if (!wg_size_id) {
+            wg_size_id = module_.GetBuiltInVariable(spv::BuiltInWorkgroupSize).Id();
+        }
+
         const uint32_t function_result = module_.TakeNextId();
         const uint32_t length_id = type_manager_.CreateConstantUInt32(num_slots).Id();
         block.CreateInstruction(spv::OpFunctionCall,
-                                {void_type, function_result, function_def, length_id},
+                                {void_type, function_result, function_def, length_id, wg_size_id},
                                 inst_it);
     } else {
         for (uint32_t i = 0; i < meta.num_elements; ++i) {
