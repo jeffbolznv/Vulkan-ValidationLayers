@@ -46,23 +46,23 @@ void RegisterSharedMemoryDataRaceValidation(Validator &gpuav, CommandBufferSubSt
             switch (error_sub_code) {
                 case kErrorSubCode_SharedMemoryDataRace_RaceOnStore: {
                     strm << "Shared memory race detected when performing store in local invocation index " <<
-                            error_record[kInst_LogError_ParameterOffset_0] << ", maybe against local invocation index " << (error_record[kInst_LogError_ParameterOffset_1] & 0xFFFF);
-                    out_vuid_msg = "VUID-RuntimeSpirv-XXX";
+                            error_record[kInst_LogError_ParameterOffset_0] << ", likely against local invocation index " << (error_record[kInst_LogError_ParameterOffset_1] & 0xFFFF);
+                    out_vuid_msg = "UNASSIGNED-VUID-RuntimeSpirv";
                 } break;
                 case kErrorSubCode_SharedMemoryDataRace_RaceOnLoadVsStore: {
                     strm << "Shared memory race detected when performing load in local invocation index " <<
-                            error_record[kInst_LogError_ParameterOffset_0] << ", maybe against local invocation index " << (error_record[kInst_LogError_ParameterOffset_1] & 0xFFFF);
-                    out_vuid_msg = "VUID-RuntimeSpirv-XXX";
+                            error_record[kInst_LogError_ParameterOffset_0] << ", likely against local invocation index " << (error_record[kInst_LogError_ParameterOffset_1] & 0xFFFF);
+                    out_vuid_msg = "UNASSIGNED-VUID-RuntimeSpirv";
                 } break;
                 case kErrorSubCode_SharedMemoryDataRace_RaceOnLoadVsAtomic: {
                     strm << "Shared memory race detected when performing load in local invocation index " <<
-                            error_record[kInst_LogError_ParameterOffset_0] << ", maybe against local invocation index " << (error_record[kInst_LogError_ParameterOffset_1] & 0xFFFF);
-                    out_vuid_msg = "VUID-RuntimeSpirv-XXX";
+                            error_record[kInst_LogError_ParameterOffset_0] << ", likely against local invocation index " << (error_record[kInst_LogError_ParameterOffset_1] & 0xFFFF);
+                    out_vuid_msg = "UNASSIGNED-VUID-RuntimeSpirv";
                 } break;
                 case kErrorSubCode_SharedMemoryDataRace_RaceOnAtomic: {
                     strm << "Shared memory race detected when performing atomic in local invocation index " <<
-                            error_record[kInst_LogError_ParameterOffset_0] << ", maybe against local invocation index " << (error_record[kInst_LogError_ParameterOffset_1] & 0xFFFF);
-                    out_vuid_msg = "VUID-RuntimeSpirv-XXX";
+                            error_record[kInst_LogError_ParameterOffset_0] << ", likely against local invocation index " << (error_record[kInst_LogError_ParameterOffset_1] & 0xFFFF);
+                    out_vuid_msg = "UNASSIGNED-VUID-RuntimeSpirv";
                 } break;
                 default:
                     error_found = false;

@@ -57,7 +57,6 @@ void SharedMemoryDataRacePass::CreateFunctionCall(BasicBlock& block, Instruction
     const uint32_t inst_position_id = type_manager_.CreateConstantUInt32(inst_position).Id();
 
     if (meta.function_idx == 0) {
-
         // workgroupsize can be a constant, so GetBuiltInVariable may insert a duplicate
         uint32_t wg_size_id = 0;
         for (const auto& annotation : module_.annotations_) {
@@ -80,7 +79,7 @@ void SharedMemoryDataRacePass::CreateFunctionCall(BasicBlock& block, Instruction
     } else {
         for (uint32_t i = 0; i < meta.num_elements; ++i) {
             const uint32_t function_result = module_.TakeNextId();
-            uint32_t start = type_manager_.GetConstantUInt32(meta.start_id + i).Id();
+            uint32_t start = type_manager_.GetConstantUInt32(meta.start + i).Id();
             block.CreateInstruction(spv::OpFunctionCall,
                                     {void_type, function_result, function_def, start, meta.access_chain_idx_id, inst_position_id},
                                     inst_it);
@@ -151,6 +150,7 @@ bool SharedMemoryDataRacePass::RequiresInstrumentation(const Function& function,
             auto ptr = function.FindInstruction(ac->Word(3));
             const Type* base_ptr_type = type_manager_.FindTypeById(ptr->Word(1));
 
+            // Get the base pointer pointee type.
             ptr_elem_type = type_manager_.FindChildType(*base_ptr_type, 0);
 
             for (uint32_t i = 4; i < access_chain_inst->Length(); ++i) {
@@ -158,6 +158,7 @@ bool SharedMemoryDataRacePass::RequiresInstrumentation(const Function& function,
                 auto idx_inst = function.FindInstruction(idx_id);
                 auto idx_type = type_manager_.FindTypeById(idx_inst->Word(1));
                 assert(idx_type->inst_.Opcode() == spv::OpTypeInt);
+                // convert to u32 if needed
                 if (idx_type->inst_.Word(2) != 32) {
                     uint32_t new_id = module_.TakeNextId();
                     block.CreateInstruction(spv::OpUConvert, {uint32_type.Id(), new_id, idx_id}, &inst_it);
@@ -167,6 +168,7 @@ bool SharedMemoryDataRacePass::RequiresInstrumentation(const Function& function,
                 switch (ptr_elem_type->spv_type_) {
                 case SpvType::kStruct:
                     {
+                        // offset_id += offsetof(struct member idx)
                         auto idx_c = type_manager_.FindConstantById(idx_id);
                         uint32_t idx_u32 = idx_c->GetValueUint32();
                         uint32_t off = type_manager_.GetNumScalarElementsBeforeCompositeMember(*ptr_elem_type, idx_u32);
@@ -178,6 +180,7 @@ bool SharedMemoryDataRacePass::RequiresInstrumentation(const Function& function,
                     break;
                 default:
                     {
+                        // offset_id += (stride of first member) * idx
                         uint32_t stride = type_manager_.GetNumScalarElementsBeforeCompositeMember(*ptr_elem_type, 1);
 
                         uint32_t stride_times_idx_id = module_.TakeNextId();
@@ -194,8 +197,8 @@ bool SharedMemoryDataRacePass::RequiresInstrumentation(const Function& function,
         }
 
         meta.access_chain_idx_id = offset_id;
-        meta.start_id = slot_start[variable];
-        meta.num_elements = type_manager_.NumScalarElements(*ptr_elem_type);
+        meta.start = slot_start[variable];
+        meta.num_elements = type_manager_.GetNumScalarElements(*ptr_elem_type);
     }
 
     if (opcode == spv::OpControlBarrier) {
@@ -232,10 +235,11 @@ bool SharedMemoryDataRacePass::Instrument() {
 
     const std::vector<const Variable*> & shmem_vars = type_manager_.GetSharedMemoryVariables();
 
+    // Compute how much shared memory is needed.
     for (auto &v : shmem_vars) {
         const Type *pointee_type = v->PointerType(type_manager_);
         slot_start[v] = num_slots;
-        uint32_t num_scalar_elements = type_manager_.NumScalarElements(*pointee_type);
+        uint32_t num_scalar_elements = type_manager_.GetNumScalarElements(*pointee_type);
         assert(num_scalar_elements != 0);
         num_slots += num_scalar_elements;
     }
@@ -247,6 +251,7 @@ bool SharedMemoryDataRacePass::Instrument() {
     // Hackily create a ::spirv::Module to compute the shared memory size.
     ::spirv::Module m(input_spirv);
     const uint32_t shared_memory_size = m.CalculateWorkgroupSharedMemory();
+    // Bail if we would overflow the limit
     if (shared_memory_size + num_slots * sizeof(uint32_t) > phys_dev_props.limits.maxComputeSharedMemorySize) {
         return false;
     }
@@ -279,6 +284,7 @@ bool SharedMemoryDataRacePass::Instrument() {
             }
             auto& block_instructions = current_block.instructions_;
 
+            // Call init_shadow at the start of the entry point
             if (function.id_ == module_.target_entry_point_id_ &&
                 block_it == function.blocks_.begin()) {
 

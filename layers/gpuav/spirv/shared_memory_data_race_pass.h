@@ -33,9 +33,13 @@ class SharedMemoryDataRacePass : public Pass {
     // This is metadata tied to a single instruction gathered during RequiresInstrumentation() to be used later
     struct InstructionMeta {
         const Instruction* target_instruction = nullptr;
+        // linked function index
         uint32_t function_idx;
+        // id of element number computed from the access chain
         uint32_t access_chain_idx_id;
-        uint32_t start_id;
+        // start of this variable in the shadow memory
+        uint32_t start;
+        // number of scalar elements touched by this access
         uint32_t num_elements;
     };
 
@@ -44,13 +48,16 @@ class SharedMemoryDataRacePass : public Pass {
 
     uint32_t GetLinkFunctionId(const InstructionMeta& meta);
 
-    // Function IDs to link in
-    uint32_t link_function_id_[4] {};
-    std::map<const Variable*, uint32_t> slot_start;
-    uint32_t num_slots {};
     const vvl::span<const uint32_t>& input_spirv;
     const VkPhysicalDeviceProperties& phys_dev_props;
     bool need_spec_constant_freeze;
+
+    // Function IDs to link in
+    uint32_t link_function_id_[4] {};
+    // Map shared memory variables to start offset in shadow memory
+    std::map<const Variable*, uint32_t> slot_start;
+    // number of slots in shadow memory
+    uint32_t num_slots {};
 };
 
 }  // namespace spirv

@@ -34,7 +34,7 @@ void NegativeGpuAVSharedMemoryDataRaceTest::TestHelper(const char *shader_source
     vk::CmdDispatch(m_command_buffer, 1, 1, 1);
     m_command_buffer.End();
 
-    m_errorMonitor->SetDesiredError("VUID-RuntimeSpirv-XXX", count);
+    m_errorMonitor->SetDesiredError("UNASSIGNED-VUID-RuntimeSpirv", count);
     m_default_queue->SubmitAndWait(m_command_buffer);
     m_errorMonitor->VerifyFound();
 

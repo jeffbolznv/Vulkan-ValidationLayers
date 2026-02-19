@@ -728,7 +728,7 @@ bool Type::Is64Bit() const {
     return false;
 }
 
-uint32_t TypeManager::NumScalarElements(const Type& type) const {
+uint32_t TypeManager::GetNumScalarElements(const Type& type) const {
     switch (type.spv_type_) {
     case SpvType::kStruct:
         return GetNumScalarElementsBeforeCompositeMember(type, type.inst_.Length() - 2);
@@ -739,10 +739,12 @@ uint32_t TypeManager::NumScalarElements(const Type& type) const {
             assert(count && !count->is_spec_constant_);
             const uint32_t array_length = (count && !count->is_spec_constant_) ? count->inst_.Operand(0) : 0;
 
-            return array_length * NumScalarElements(*FindTypeById(type.inst_.Word(2)));
+            return array_length * GetNumScalarElements(*FindTypeById(type.inst_.Word(2)));
         }
     case SpvType::kVector:
         return type.inst_.Word(3);
+    case SpvType::kMatrix:
+        return type.inst_.Word(3) * GetNumScalarElements(*FindTypeById(type.inst_.Word(2)));
     case SpvType::kInt:
     case SpvType::kFloat:
     case SpvType::kBool:
@@ -776,6 +778,7 @@ const Type *TypeManager::FindChildType(const Type& type, uint32_t idx) const {
         assert(idx == 0);
         return FindTypeById(type.inst_.Word(2));
     case SpvType::kVector:
+    case SpvType::kMatrix:
         assert(idx == 0);
         return FindTypeById(type.inst_.Word(2));
     case SpvType::kInt:
@@ -791,7 +794,7 @@ const Type *TypeManager::FindChildType(const Type& type, uint32_t idx) const {
 uint32_t TypeManager::GetNumScalarElementsBeforeCompositeMember(const Type& type, uint32_t idx) const {
     uint32_t ret = 0;
     for (uint32_t i = 0; i < idx; ++i) {
-        ret += NumScalarElements(*FindChildType(type, i));
+        ret += GetNumScalarElements(*FindChildType(type, i));
     }
     return ret;
 }

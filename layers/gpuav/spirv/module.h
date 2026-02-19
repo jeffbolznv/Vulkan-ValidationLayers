@@ -123,6 +123,7 @@ class Module {
     // Will be set in the LogErrorPass
     uint32_t error_payload_variable_id_ = 0;
 
+    // Used by SharedMemoryDataRacePass, linked by Module::LinkFunctions
     uint32_t shared_memory_shadow_variable_id_ = 0;
 };
 

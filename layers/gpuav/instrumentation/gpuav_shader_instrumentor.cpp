@@ -41,6 +41,7 @@
 #include "state_tracker/descriptor_sets.h"
 #include "state_tracker/shader_object_state.h"
 #include "state_tracker/descriptor_mode.h"
+#include "state_tracker/shader_module.h"
 #include "gpuav/resources/gpuav_state_trackers.h"
 
 #include "gpuav/spirv/module.h"
@@ -57,9 +58,9 @@
 #include "gpuav/spirv/post_process_descriptor_indexing_pass.h"
 #include "gpuav/spirv/vertex_attribute_fetch_oob_pass.h"
 #include "gpuav/spirv/sanitizer_pass.h"
-#include "state_tracker/shader_module.h"
 
 #include "spirv-tools/optimizer.hpp"
+
 #include <cassert>
 #include <string>
 #include <filesystem>
@@ -1620,7 +1621,6 @@ bool GpuShaderInstrumentor::InstrumentShader(const vvl::span<const uint32_t>& in
         DumpSpirvToFile(non_instrumented_spirv_file.string(), input_spirv.data(), input_spirv.size());
     }
 
-
     bool has_spec_constants = false;
     bool has_workgroup_memory = false;
     size_t offset = 5;
@@ -1654,6 +1654,8 @@ bool GpuShaderInstrumentor::InstrumentShader(const vvl::span<const uint32_t>& in
         offset += length;
     }
 
+    // workgroup memory variables can be sized by spec constants, the data race pass needs
+    // the constants to be frozen.
     bool need_spec_constant_freeze = gpuav_settings.shader_instrumentation.shared_memory_data_race && has_spec_constants && has_workgroup_memory;
     std::vector<uint32_t> specialized_spirv;
 
