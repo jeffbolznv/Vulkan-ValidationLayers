@@ -1708,8 +1708,8 @@ bool GpuShaderInstrumentor::InstrumentShader(const vvl::span<const uint32_t>& in
         optimizer.RegisterPass(spvtools::CreateFreezeSpecConstantValuePass());
         optimizer.RegisterPass(spvtools::CreateFoldSpecConstantOpAndCompositePass());
 
-        auto const optimized = optimizer.Run(input_spirv.data(), input_spirv.size(), &specialized_spirv,
-                                             spvtools::ValidatorOptions(), true);
+        [[maybe_unused]] auto const optimized =
+            optimizer.Run(input_spirv.data(), input_spirv.size(), &specialized_spirv, spvtools::ValidatorOptions(), true);
         assert(optimized);
         maybe_optimized_spirv = vvl::make_span<const uint32_t>(specialized_spirv.data(), specialized_spirv.size());
     }
