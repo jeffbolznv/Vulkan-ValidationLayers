@@ -37,34 +37,34 @@ const static OfflineFunction kOfflineFunction[4] =
 };
 
 SharedMemoryDataRacePass::SharedMemoryDataRacePass(Module& module, const vvl::span<const uint32_t>& input_spirv,
-                                                   const VkPhysicalDeviceProperties& phys_dev_props)
+                                                   const VkPhysicalDeviceProperties& phys_dev_props,
+                                                   bool need_spec_constant_freeze)
                                                    : Pass(module, kOfflineModule)
                                                    , input_spirv(input_spirv)
-                                                   , phys_dev_props(phys_dev_props) {
+                                                   , phys_dev_props(phys_dev_props)
+                                                   , need_spec_constant_freeze(need_spec_constant_freeze) {
     module.use_bda_ = true;
 }
 
 uint32_t SharedMemoryDataRacePass::GetLinkFunctionId(const InstructionMeta& meta) { return GetLinkFunction(link_function_id_[meta.function_idx], kOfflineFunction[meta.function_idx]); }
 
-// OpHitObjectTraceRayEXT
-// OpHitObjectTraceRayMotionEXT
-// OpHitObjectTraceReorderExecuteEXT
-// OpHitObjectTraceMotionReorderExecuteEXT
-uint32_t SharedMemoryDataRacePass::CreateFunctionCall(BasicBlock& block, InstructionIt* inst_it, const InstructionMeta& meta) {
-    const uint32_t function_result = module_.TakeNextId();
+void SharedMemoryDataRacePass::CreateFunctionCall(BasicBlock& block, InstructionIt* inst_it, const InstructionMeta& meta) {
     const uint32_t function_def = GetLinkFunctionId(meta);
     const uint32_t void_type = type_manager_.GetTypeVoid().Id();
 
-    const uint32_t inst_position = meta.target_instruction->GetPositionOffset();
+    // XXX TODO need to disable source mapping when we ran spirv opt
+    const uint32_t inst_position = need_spec_constant_freeze ? 1 : meta.target_instruction->GetPositionOffset();
     const uint32_t inst_position_id = type_manager_.CreateConstantUInt32(inst_position).Id();
 
     if (meta.function_idx == 0) {
+        const uint32_t function_result = module_.TakeNextId();
         const uint32_t length_id = type_manager_.CreateConstantUInt32(num_slots).Id();
         block.CreateInstruction(spv::OpFunctionCall,
                                 {void_type, function_result, function_def, length_id},
                                 inst_it);
     } else {
         for (uint32_t i = 0; i < meta.num_elements; ++i) {
+            const uint32_t function_result = module_.TakeNextId();
             uint32_t start = type_manager_.GetConstantUInt32(meta.start_id + i).Id();
             block.CreateInstruction(spv::OpFunctionCall,
                                     {void_type, function_result, function_def, start, meta.access_chain_idx_id, inst_position_id},
@@ -72,7 +72,6 @@ uint32_t SharedMemoryDataRacePass::CreateFunctionCall(BasicBlock& block, Instruc
         }
     }
     module_.need_log_error_ = true;
-    return function_result;
 }
 
 bool SharedMemoryDataRacePass::RequiresInstrumentation(const Function& function, BasicBlock &block, InstructionIt& inst_it, const Instruction& inst, InstructionMeta& meta) {

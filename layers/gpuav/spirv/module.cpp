@@ -678,6 +678,7 @@ void Module::LinkFunctions(const LinkInfo& info) {
                        ((info.module.flags & SharedMemoryDataRaceShadow) != 0)) {
                 // XXX TODO should check for array length == 99999
                 id_swap_map[old_result_id] = shared_memory_shadow_variable_id_;
+                AddInterfaceVariables(shared_memory_shadow_variable_id_, storage_class);
             } else if (storage_class == spv::StorageClassInput) {
                 // Can't have duplicate inputs
                 auto local_invocation_index = GetBuiltInVariable(spv::BuiltInLocalInvocationIndex);

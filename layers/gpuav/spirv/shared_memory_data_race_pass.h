@@ -24,7 +24,7 @@ namespace spirv {
 
 class SharedMemoryDataRacePass : public Pass {
   public:
-    SharedMemoryDataRacePass(Module& module, const vvl::span<const uint32_t>& input_spirv, const VkPhysicalDeviceProperties& phys_dev_props);
+    SharedMemoryDataRacePass(Module& module, const vvl::span<const uint32_t>& input_spirv, const VkPhysicalDeviceProperties& phys_dev_props, bool need_spec_constant_freeze);
     const char* Name() const final { return "SharedMemoryDataRacePass"; }
     bool Instrument() final;
     void PrintDebugInfo() const final;
@@ -40,7 +40,7 @@ class SharedMemoryDataRacePass : public Pass {
     };
 
     bool RequiresInstrumentation(const Function& function, BasicBlock &block, InstructionIt& inst_it, const Instruction& inst, InstructionMeta& meta);
-    uint32_t CreateFunctionCall(BasicBlock& block, InstructionIt* inst_it, const InstructionMeta& meta);
+    void CreateFunctionCall(BasicBlock& block, InstructionIt* inst_it, const InstructionMeta& meta);
 
     uint32_t GetLinkFunctionId(const InstructionMeta& meta);
 
@@ -50,6 +50,7 @@ class SharedMemoryDataRacePass : public Pass {
     uint32_t num_slots {};
     const vvl::span<const uint32_t>& input_spirv;
     const VkPhysicalDeviceProperties& phys_dev_props;
+    bool need_spec_constant_freeze;
 };
 
 }  // namespace spirv
