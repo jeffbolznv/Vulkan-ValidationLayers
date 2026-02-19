@@ -52,7 +52,9 @@ void SharedMemoryDataRacePass::CreateFunctionCall(BasicBlock& block, Instruction
     const uint32_t function_def = GetLinkFunctionId(meta);
     const uint32_t void_type = type_manager_.GetTypeVoid().Id();
 
-    // XXX TODO need to disable source mapping when we ran spirv opt
+    // XXX TODO need a better solution to handle source mapping when we've run
+    // spirv-opt to freeze spec constants. For now, this just uses a bogus line
+    // number in that case.
     const uint32_t inst_position = need_spec_constant_freeze ? 1 : meta.target_instruction->GetPositionOffset();
     const uint32_t inst_position_id = type_manager_.CreateConstantUInt32(inst_position).Id();
 
