@@ -32,6 +32,7 @@
 #include "gpuav/shaders/gpuav_error_codes.h"
 #include "gpuav/shaders/gpuav_error_header.h"
 #include "gpuav/spirv/log_error_pass.h"
+#include "gpuav/spirv/poison_pass.h"
 #include "error_message/spirv_logging.h"
 #include <spirv/unified1/NonSemanticShaderDebugInfo100.h>
 #include <spirv/unified1/spirv.hpp>
@@ -1693,6 +1694,11 @@ bool GpuShaderInstrumentor::InstrumentShader(const vvl::span<const uint32_t>& in
     // Currently only runs in Safe Mode until have perf numbers how costly it is to enable
     if (gpuav_settings.shader_instrumentation.sanitizer && gpuav_settings.safe_mode) {
         spirv::SanitizerPass pass(module);
+        modified |= pass.Run();
+    }
+
+    if (gpuav_settings.shader_instrumentation.poison_value) {
+        spirv::PoisonPass pass(module);
         modified |= pass.Run();
     }
 
